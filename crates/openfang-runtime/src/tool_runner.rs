@@ -879,7 +879,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "action": {
                         "type": "object",
-                        "description": "Action: {\"action\":\"system_event\",\"text\":\"...\"} or {\"action\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300}"
+                        "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300}"
                     },
                     "delivery": {
                         "type": "object",

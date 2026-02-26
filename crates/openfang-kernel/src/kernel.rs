@@ -1083,12 +1083,22 @@ impl OpenFangKernel {
     }
 
     /// Send a message to an agent and get a response.
+    ///
+    /// Automatically upgrades the kernel handle from `self_handle` so that
+    /// agent turns triggered by cron, channels, events, or inter-agent calls
+    /// have full access to kernel tools (cron_create, agent_send, etc.).
     pub async fn send_message(
         &self,
         agent_id: AgentId,
         message: &str,
     ) -> KernelResult<AgentLoopResult> {
-        self.send_message_with_handle(agent_id, message, None).await
+        let handle: Option<Arc<dyn KernelHandle>> = self
+            .self_handle
+            .get()
+            .and_then(|w| w.upgrade())
+            .map(|arc| arc as Arc<dyn KernelHandle>);
+        self.send_message_with_handle(agent_id, message, handle)
+            .await
     }
 
     /// Send a message with an optional kernel handle for inter-agent tools.
@@ -3105,15 +3115,24 @@ impl OpenFangKernel {
                                 tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
                                 let timeout_s = timeout_secs.unwrap_or(120);
                                 let timeout = std::time::Duration::from_secs(timeout_s);
+                                let delivery = job.delivery.clone();
                                 match tokio::time::timeout(
                                     timeout,
                                     kernel.send_message(agent_id, message),
                                 )
                                 .await
                                 {
-                                    Ok(Ok(_result)) => {
+                                    Ok(Ok(result)) => {
                                         tracing::info!(job = %job_name, "Cron job completed successfully");
                                         kernel.cron_scheduler.record_success(job_id);
+                                        // Deliver response to configured channel
+                                        cron_deliver_response(
+                                            &kernel,
+                                            agent_id,
+                                            &result.response,
+                                            &delivery,
+                                        )
+                                        .await;
                                     }
                                     Ok(Err(e)) => {
                                         let err_msg = format!("{e}");
@@ -4165,6 +4184,74 @@ fn shared_memory_agent_id() -> AgentId {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x01,
     ]))
+}
+
+/// Deliver a cron job's agent response to the configured delivery target.
+async fn cron_deliver_response(
+    kernel: &OpenFangKernel,
+    agent_id: AgentId,
+    response: &str,
+    delivery: &openfang_types::scheduler::CronDelivery,
+) {
+    use openfang_types::scheduler::CronDelivery;
+
+    if response.is_empty() {
+        return;
+    }
+
+    match delivery {
+        CronDelivery::None => {}
+        CronDelivery::Channel { channel, to } => {
+            tracing::debug!(channel = %channel, to = %to, "Cron: delivering to channel");
+            // Persist as last channel for this agent (survives restarts)
+            let kv_val = serde_json::json!({"channel": channel, "recipient": to});
+            let _ = kernel
+                .memory
+                .structured_set(agent_id, "delivery.last_channel", kv_val);
+        }
+        CronDelivery::LastChannel => {
+            match kernel
+                .memory
+                .structured_get(agent_id, "delivery.last_channel")
+            {
+                Ok(Some(val)) => {
+                    let channel = val["channel"].as_str().unwrap_or("");
+                    let recipient = val["recipient"].as_str().unwrap_or("");
+                    if !channel.is_empty() && !recipient.is_empty() {
+                        tracing::info!(
+                            channel = %channel,
+                            recipient = %recipient,
+                            "Cron: delivering to last channel"
+                        );
+                    }
+                }
+                _ => {
+                    tracing::debug!("Cron: no last channel found for agent {}", agent_id);
+                }
+            }
+        }
+        CronDelivery::Webhook { url } => {
+            tracing::debug!(url = %url, "Cron: delivering via webhook");
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build();
+            if let Ok(client) = client {
+                let payload = serde_json::json!({
+                    "agent_id": agent_id.to_string(),
+                    "response": response,
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                });
+                match client.post(url).json(&payload).send().await {
+                    Ok(resp) => {
+                        tracing::debug!(status = %resp.status(), "Cron webhook delivered");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Cron webhook delivery failed");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
