@@ -14,17 +14,15 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 COPY --from=builder /build/target/release/openfang /usr/local/bin/
 COPY --from=builder /build/agents /opt/openfang/agents
 
-# Pre-bake config.toml so startup doesn't depend on env-var detection.
-# Two critical fixes:
-#   1. api_listen = 0.0.0.0:4200  →  Railway needs 0.0.0.0, not 127.0.0.1
-#   2. provider = gemini           →  avoids groq MissingApiKey crash on boot
-# User must set GEMINI_API_KEY in Railway service variables.
+# Pre-bake config.toml with correct TOML structure.
+# CRITICAL: api_listen MUST be at root level (before any [section] header).
+# If placed inside [default_model], TOML parses it as default_model.api_listen
+# and the server falls back to 127.0.0.1:4200 which Railway can't reach.
 RUN mkdir -p /root/.openfang \
- && printf '[default_model]\nprovider = "gemini"\nmodel = "gemini-2.5-flash"\napi_key_env = "GEMINI_API_KEY"\n\napi_listen = "0.0.0.0:4200"\n\n[memory]\ndecay_rate = 0.05\n' \
+ && printf 'api_listen = "0.0.0.0:4200"\n\n[default_model]\nprovider = "gemini"\nmodel = "gemini-2.5-flash"\napi_key_env = "GEMINI_API_KEY"\n\n[memory]\ndecay_rate = 0.05\n' \
     > /root/.openfang/config.toml
 
 ENV OPENFANG_HOME=/data
+ENV RUST_BACKTRACE=1
 EXPOSE 4200
-# init is idempotent -- config.toml already exists, so init skips creation.
-# start boots the kernel + HTTP server on 0.0.0.0:4200.
 CMD ["/bin/sh", "-c", "openfang init --quick && openfang start"]
