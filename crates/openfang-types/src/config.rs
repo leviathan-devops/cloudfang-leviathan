@@ -929,7 +929,8 @@ pub struct KernelConfig {
     pub data_dir: PathBuf,
     /// Log level (trace, debug, info, warn, error).
     pub log_level: String,
-    /// gRPC API listen address.
+    /// API listen address (e.g., "0.0.0.0:4200").
+    #[serde(alias = "listen_addr")]
     pub api_listen: String,
     /// Whether to enable the OFP network layer.
     pub network_enabled: bool,

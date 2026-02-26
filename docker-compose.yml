@@ -2,7 +2,7 @@ version: "3.8"
 services:
   openfang:
     build: .
-    image: ghcr.io/RightNow-AI/openfang:latest
+    image: ghcr.io/rightnow-ai/openfang:latest
     ports:
       - "4200:4200"
     volumes:

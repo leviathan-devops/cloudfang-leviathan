@@ -958,6 +958,18 @@ impl OpenFangKernel {
             manifest.exec_policy = Some(self.config.exec_policy.clone());
         }
 
+        // Overlay kernel default_model onto agent if no custom key/url is set.
+        // This ensures agents respect the user's configured provider from `openfang init`.
+        if manifest.model.api_key_env.is_none() && manifest.model.base_url.is_none() {
+            let dm = &self.config.default_model;
+            if !dm.provider.is_empty() {
+                manifest.model.provider = dm.provider.clone();
+            }
+            if !dm.model.is_empty() {
+                manifest.model.model = dm.model.clone();
+            }
+        }
+
         // Create workspace directory for the agent
         let workspace_dir = manifest.workspace.clone().unwrap_or_else(|| {
             self.config.effective_workspaces_dir().join(format!(
