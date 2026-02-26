@@ -1,18 +1,17 @@
 # Leviathan DevOps — OpenFang deployment
-# Uses pre-compiled release binary — fast deploys, no 15-min Rust compile
+# Uses .deb package for correct dependency resolution (libssl, libsqlite3 etc.)
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
-# Download OpenFang v0.1.1 release binary (x86_64 Linux)
+# Install OpenFang via .deb — handles all dynamic lib deps automatically
 RUN curl -fsSL \
-  "https://github.com/RightNow-AI/openfang/releases/download/v0.1.1/openfang-x86_64-unknown-linux-gnu.tar.gz" \
-  -o /tmp/openfang.tar.gz \
-  && tar -xzf /tmp/openfang.tar.gz -C /usr/local/bin/ \
-  && chmod +x /usr/local/bin/openfang \
-  && rm /tmp/openfang.tar.gz
+  "https://github.com/RightNow-AI/openfang/releases/download/v0.1.1/OpenFang_0.1.0_amd64.deb" \
+  -o /tmp/openfang.deb \
+  && dpkg -i /tmp/openfang.deb \
+  && rm /tmp/openfang.deb
 
-# Bake in Leviathan config at /etc/openfang/config.toml (explicit path, never overwritten by init)
+# Bake in Leviathan config at /etc/openfang/config.toml
 # CRITICAL: api_listen MUST be at root level, before any [section] header
 RUN mkdir -p /etc/openfang && cat > /etc/openfang/config.toml << 'TOML'
 api_listen = "0.0.0.0:4200"
@@ -40,11 +39,11 @@ dm_policy = "respond"
 group_policy = "respond"
 TOML
 
-# /data = OPENFANG_HOME (db, workspace, logs) — matches Railway env
+# /data = OPENFANG_HOME (db, workspace, logs)
 RUN mkdir -p /data
 ENV OPENFANG_HOME=/data
 ENV RUST_BACKTRACE=1
 EXPOSE 4200
 
-# init sets up SQLite db in OPENFANG_HOME; start loads our explicit config
-CMD ["/bin/sh", "-c", "openfang init --quick && openfang start --config /etc/openfang/config.toml"]
+# Start directly — OpenFang auto-inits db on first run
+CMD ["/bin/sh", "-c", "openfang start --config /etc/openfang/config.toml"]
