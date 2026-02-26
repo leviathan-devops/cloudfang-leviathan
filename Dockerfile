@@ -12,9 +12,9 @@ RUN curl -fsSL \
   && chmod +x /usr/local/bin/openfang \
   && rm /tmp/openfang.tar.gz
 
-# Bake in Leviathan config
+# Bake in Leviathan config at /etc/openfang/config.toml (explicit path, never overwritten by init)
 # CRITICAL: api_listen MUST be at root level, before any [section] header
-RUN mkdir -p /root/.openfang && cat > /root/.openfang/config.toml << 'EOF'
+RUN mkdir -p /etc/openfang && cat > /etc/openfang/config.toml << 'TOML'
 api_listen = "0.0.0.0:4200"
 usage_footer = "Full"
 
@@ -38,10 +38,13 @@ guild_ids = ["1475947548811202613"]
 [channels.discord.overrides]
 dm_policy = "respond"
 group_policy = "respond"
-EOF
+TOML
 
+# /data = OPENFANG_HOME (db, workspace, logs) — matches Railway env
+RUN mkdir -p /data
 ENV OPENFANG_HOME=/data
 ENV RUST_BACKTRACE=1
 EXPOSE 4200
 
-CMD ["/bin/sh", "-c", "openfang init --quick && openfang start"]
+# init sets up SQLite db in OPENFANG_HOME; start loads our explicit config
+CMD ["/bin/sh", "-c", "openfang init --quick && openfang start --config /etc/openfang/config.toml"]
