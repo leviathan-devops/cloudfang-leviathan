@@ -1,5 +1,5 @@
 # Leviathan DevOps — OpenFang deployment
-# Uses pre-compiled release binary — fast deploys
+# Uses pre-compiled release binary — fast deploys, no 15-min Rust compile
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 && rm -rf /var/lib/apt/lists/*
@@ -12,7 +12,7 @@ RUN curl -fsSL \
   && chmod +x /usr/local/bin/openfang \
   && rm /tmp/openfang.tar.gz
 
-# Config template — PORT_PLACEHOLDER will be replaced at startup with real $PORT
+# Config template — PORT injected at startup from Railway's $PORT env var
 RUN mkdir -p /root/.openfang && cat > /root/.openfang/config.toml.template << 'TOML'
 api_listen = "0.0.0.0:PORT_PLACEHOLDER"
 usage_footer = "Full"
@@ -42,5 +42,5 @@ TOML
 ENV RUST_BACKTRACE=1
 EXPOSE 8080
 
-# At startup: bake PORT into config, init, then start
-CMD ["/bin/sh", "-c", "PORT_VAL=${PORT:-8080} && sed \"s/PORT_PLACEHOLDER/$PORT_VAL/\" /root/.openfang/config.toml.template > /root/.openfang/config.toml && echo \"Starting OpenFang on port $PORT_VAL\" && openfang init --quick && openfang start"]
+# Bake real PORT into config at startup, then run OpenFang
+CMD ["/bin/sh", "-c", "PORT_VAL=${PORT:-8080} && sed \"s/PORT_PLACEHOLDER/$PORT_VAL/\" /root/.openfang/config.toml.template > /root/.openfang/config.toml && openfang init --quick && openfang start"]
