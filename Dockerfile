@@ -1,19 +1,20 @@
 # Leviathan DevOps — OpenFang deployment
-# Uses .deb package for correct dependency resolution (libssl, libsqlite3 etc.)
+# Debug version: force all output to stdout to diagnose crash
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 && rm -rf /var/lib/apt/lists/*
 
-# Install OpenFang via .deb — handles all dynamic lib deps automatically
+# Download OpenFang v0.1.1 release binary (x86_64 Linux)
 RUN curl -fsSL \
-  "https://github.com/RightNow-AI/openfang/releases/download/v0.1.1/OpenFang_0.1.0_amd64.deb" \
-  -o /tmp/openfang.deb \
-  && dpkg -i /tmp/openfang.deb \
-  && rm /tmp/openfang.deb
+  "https://github.com/RightNow-AI/openfang/releases/download/v0.1.1/openfang-x86_64-unknown-linux-gnu.tar.gz" \
+  -o /tmp/openfang.tar.gz \
+  && tar -xzf /tmp/openfang.tar.gz -C /usr/local/bin/ \
+  && chmod +x /usr/local/bin/openfang \
+  && rm /tmp/openfang.tar.gz
 
-# Bake in Leviathan config at /etc/openfang/config.toml
+# Bake in Leviathan config at ~/.openfang/config.toml (where OpenFang actually reads it)
 # CRITICAL: api_listen MUST be at root level, before any [section] header
-RUN mkdir -p /etc/openfang && cat > /etc/openfang/config.toml << 'TOML'
+RUN mkdir -p /root/.openfang && cat > /root/.openfang/config.toml << 'TOML'
 api_listen = "0.0.0.0:4200"
 usage_footer = "Full"
 
@@ -39,11 +40,9 @@ dm_policy = "respond"
 group_policy = "respond"
 TOML
 
-# /data = OPENFANG_HOME (db, workspace, logs)
-RUN mkdir -p /data
 ENV OPENFANG_HOME=/data
 ENV RUST_BACKTRACE=1
 EXPOSE 4200
 
-# Start directly — OpenFang auto-inits db on first run
-CMD ["/bin/sh", "-c", "openfang start --config /etc/openfang/config.toml"]
+# Debug: echo each step, redirect all stderr to stdout
+CMD ["/bin/sh", "-c", "echo '=== BINARY CHECK ===' && openfang --version 2>&1 && echo '=== INIT ===' && openfang init --quick 2>&1 && echo '=== STARTING ===' && openfang start 2>&1"]
