@@ -13,8 +13,8 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/target/release/openfang /usr/local/bin/
 COPY --from=builder /build/agents /opt/openfang/agents
-# Note: VOLUME removed — use Railway Volume mounted at /data instead
+# Note: VOLUME removed — Railway Volume mounted at /data instead
 ENV OPENFANG_HOME=/data
 EXPOSE 4200
-ENTRYPOINT ["openfang"]
-CMD ["serve"]
+# init sets up /data config dirs (idempotent); start launches daemon + dashboard on :4200
+CMD ["/bin/sh", "-c", "openfang init --non-interactive 2>/dev/null || openfang init; openfang start"]
