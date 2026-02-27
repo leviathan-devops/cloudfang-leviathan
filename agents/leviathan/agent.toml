@@ -344,7 +344,7 @@ model = "llama-3.3-70b-versatile"
 api_key_env = "GROQ_API_KEY"
 
 [resources]
-max_llm_tokens_per_hour = 500000
+max_llm_tokens_per_hour = 300000
 max_concurrent_tools = 10
 
 [capabilities]
