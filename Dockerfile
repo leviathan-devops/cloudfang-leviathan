@@ -58,12 +58,16 @@ max_summary_tokens = 1024
 
 [channels.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
-default_agent = "leviathan"
+default_agent = "neural-net"
 intents = 37377
+typing_indicator = "persistent"
 
 [channels.discord.overrides]
 group_policy = "all"
 dm_policy = "respond"
+dm_agent = "leviathan"
+mention_agent = "leviathan"
+cross_talk = true
 
 [channels.discord.overrides."1476978586828411073"]
 agent = "prompt-architect"
