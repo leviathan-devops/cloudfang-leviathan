@@ -59,6 +59,9 @@ threshold = 80
 keep_recent = 20
 max_summary_tokens = 1024
 
+# ─── BOT 1: LEVIATHAN CTO ───
+# Responds ONLY to DMs and @mentions. Does NOT respond to general channel messages.
+# CTO is the Emperor — you summon him directly, he doesn't lurk in every channel.
 [channels.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
 default_agent = "leviathan"
@@ -66,12 +69,14 @@ intents = 37377
 typing_indicator = "persistent"
 
 [channels.discord.overrides]
-group_policy = "all"
+group_policy = "none"
 dm_policy = "respond"
-dm_agent = "leviathan"
 mention_agent = "leviathan"
 cross_talk = true
 
+# ─── BOT 2: LEVIATHAN CLOUD (Neural Net) ───
+# DEFAULT responder in all channels. The always-on operator.
+# Emperor's generals — unified hive mind across the server.
 [channels.discord_cloud]
 bot_token_env = "DISCORD_BOT_TOKEN_CLOUD"
 default_agent = "neural-net"
@@ -81,8 +86,15 @@ typing_indicator = "persistent"
 [channels.discord_cloud.overrides]
 group_policy = "all"
 dm_policy = "respond"
+mention_agent = "neural-net"
 cross_talk = true
 
+# ─── BOT 3: LEVIATHAN BRAIN ───
+# SANDBOXED to 3 channels ONLY: #meta-prompting, #agent-prompting, #brainwave-data
+# Cannot see or respond in ANY other channel. Zero server-wide access.
+# #meta-prompting = Owner + CTO private channel (Brain answers Owner's raw ideas)
+# #agent-prompting = CTO/Cloud query Brain here — ALL interactions visible as plaintext
+# #brainwave-data = Brain logs full reasoning chains as PDFs (write-only)
 [channels.discord_brain]
 bot_token_env = "DISCORD_BOT_TOKEN_BRAIN"
 default_agent = "prompt-architect"
@@ -93,7 +105,18 @@ typing_indicator = "persistent"
 group_policy = "none"
 dm_policy = "respond"
 
+# #meta-prompting — Owner's private idea refinement channel (Brain + CTO + Owner only)
 [channels.discord_brain.overrides."1476978586828411073"]
+agent = "prompt-architect"
+
+# #agent-prompting — CTO/Cloud query Brain here, all interactions visible as plaintext
+# IMPORTANT: This channel ID must be set after creating the channel in Discord
+[channels.discord_brain.overrides."AGENT_PROMPTING_CHANNEL_ID"]
+agent = "prompt-architect"
+
+# #brainwave-data — Brain logs reasoning chain PDFs here (write-only output channel)
+# IMPORTANT: This channel ID must be set after creating the channel in Discord
+[channels.discord_brain.overrides."BRAINWAVE_DATA_CHANNEL_ID"]
 agent = "prompt-architect"
 TOML
 
