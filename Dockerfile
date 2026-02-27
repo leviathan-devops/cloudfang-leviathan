@@ -1,5 +1,5 @@
-# Leviathan DevOps — OpenFang v0.1.3 (fresh vanilla deploy)
-# Phase 1: Get Discord working first, customize later
+# Leviathan DevOps — OpenFang v0.1.3
+# Phase 2: Leviathan CTO agent with full architecture
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 && rm -rf /var/lib/apt/lists/*
@@ -12,25 +12,51 @@ RUN curl -fsSL \
   && chmod +x /usr/local/bin/openfang \
   && rm /tmp/openfang.tar.gz
 
-# Initialize OpenFang directory structure (creates ~/.openfang/ with defaults)
+# Initialize OpenFang directory structure
 RUN openfang init --quick
 
-# Minimal config — ONLY what's needed for Discord + DeepSeek
-# Port is injected at runtime from Railway's $PORT env var
+# Copy custom Leviathan agent manifest
+COPY agents/leviathan/agent.toml /root/.openfang/agents/leviathan/agent.toml
+
+# Full Leviathan config — DeepSeek V3 primary, OpenRouter + Groq fallbacks
+# Port injected at runtime from Railway's $PORT env var
 RUN cat > /root/.openfang/config.toml.template << 'TOML'
 api_listen = "0.0.0.0:PORT_PLACEHOLDER"
 api_key = "leviathan-test-key-2026"
-log_level = "debug"
+log_level = "info"
+usage_footer = "full"
 
 [default_model]
 provider = "deepseek"
 model = "deepseek-chat"
 api_key_env = "DEEPSEEK_API_KEY"
 
+[[fallback_providers]]
+provider = "openrouter"
+model = "qwen/qwen3-32b"
+api_key_env = "OPENROUTER_API_KEY"
+
+[[fallback_providers]]
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"
+
+[memory]
+decay_rate = 0.05
+
+[compaction]
+threshold = 80
+keep_recent = 20
+max_summary_tokens = 1024
+
 [channels.discord]
 bot_token_env = "DISCORD_BOT_TOKEN"
-default_agent = "assistant"
+default_agent = "leviathan"
 intents = 37377
+
+[channels.discord.overrides]
+group_policy = "all"
+dm_policy = "respond"
 TOML
 
 ENV RUST_BACKTRACE=1
