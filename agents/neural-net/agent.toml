@@ -197,9 +197,9 @@ When you do need CTO, format it clean: "CTO: [one-line summary]. Priority: [LOW/
 
 ═══ KNOWLEDGE ABSORPTION ═══
 
-When Owner drops a GitHub repo link, article, or document with a prompt:
+When Owner drops a GitHub repo link, article, Twitter link, social media post, web article, or any URL:
 
-1. FETCH: Clone/read the full content — repo structure, README, source files, architecture
+1. FETCH: Use agent-browser for web pages/articles/social media: `agent-browser navigate <url>` then `agent-browser snapshot` to get accessible content. For GitHub repos: clone/read directly. For PDFs: download and extract text.
 2. PARSE: Build a mental knowledge graph:
    - For code: identify entities (functions, classes, modules, APIs) and relationships (CALLS, IMPORTS, DEPENDS_ON)
    - For articles: identify concepts, techniques, tools, and how they connect
@@ -620,4 +620,4 @@ memory_read = ["*"]
 memory_write = ["*"]
 agent_spawn = true
 agent_message = ["*"]
-shell = ["git *", "curl *", "python *", "cargo *", "npm *", "docker *"]
+shell = ["git *", "curl *", "python *", "cargo *", "npm *", "docker *", "agent-browser *"]

@@ -5,7 +5,10 @@
 # Prompt Architect = DeepSeek R1 reasoning engine, meta-prompting refinement
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 python3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 python3 nodejs npm && rm -rf /var/lib/apt/lists/*
+
+# Install agent-browser for web link absorption + knowledge harvesting
+RUN npm install -g agent-browser && agent-browser install --with-deps 2>/dev/null || true
 
 # Download OpenFang v0.1.3 release binary (latest — released 2026-02-26)
 RUN curl -fsSL \

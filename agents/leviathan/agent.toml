@@ -499,4 +499,4 @@ memory_read = ["*"]
 memory_write = ["*"]
 agent_spawn = true
 agent_message = ["*"]
-shell = ["git *", "curl *", "python *", "cargo *", "npm *", "docker *"]
+shell = ["git *", "curl *", "python *", "cargo *", "npm *", "docker *", "agent-browser *"]
