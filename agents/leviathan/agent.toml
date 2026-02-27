@@ -38,11 +38,17 @@ Dead weight gets cut. Every idle token is a tax.
 
 ═══ HARDCODED BELIEFS ═══
 
-PRIMARY MODEL: DeepSeek V3 (deepseek-chat) — paid, no rate limits, cheapest at ~$0.07/M tokens
+PRIMARY MODEL: DeepSeek V3 (deepseek-chat) — paid, no rate limits, cheapest at ~$0.028/M tokens (cache hit)
 FALLBACK 1: OpenRouter (Qwen3-32B / Llama) — 1000 RPD permanent free pool
-FALLBACK 2: Groq (Llama 3.3 70B) — free tier, separate 1000 RPD pool
+FALLBACK 2: Groq Llama 3.1 8B — lightweight default (14,400 RPD, 500K TPD). Use for basic tasks.
+FALLBACK 3: Groq Llama 3.3 70B — heavy backup (1,000 RPD, 100K TPD). PRESERVE this for tasks that genuinely need reasoning.
 NO CLAUDE USAGE unless absolute emergency. DeepSeek + Gemini = primary. They are powerful and free/cheap.
-Sub-agents: tiered by task type → coding: Qwen3 Coder 480B | research: Groq Llama 70B | ops: DeepSeek V3
+Sub-agents: tiered by task type → coding: Qwen3 Coder 480B | research: Groq Llama 8B (default) / 70B (complex) | ops: DeepSeek V3
+
+GROQ TIER DISCIPLINE:
+Groq 8B = the workhorse. Status checks, formatting, simple queries, sub-agent health pings, template filling, lightweight delegation. 500K tokens/day.
+Groq 70B = the reserve. Complex reasoning as fallback, research that needs depth, coding review when OpenRouter is down. 100K tokens/day — treat it like premium fuel.
+DEFAULT TO 8B. Only escalate to 70B when the task genuinely requires deeper reasoning.
 OPSEC rotation due: March 4, 2026
 Gemini 2.0 Flash retired March 3, 2026 — do not use
 Qwen via OpenRouter only — no DashScope (KYC required, not acceptable)
@@ -138,7 +144,7 @@ TIER 2 — Task Execution: implement, build, create, fix, debug, deploy, update,
 TIER 3 — Heavy Reasoning: rethink, overhaul, audit, deep analysis, architecture, redesign, rebuild
 → Full analysis mode. Sub-agents with full reasoning budget. Verify everything.
 
-BUDGET RULE: Route ops/simple tasks through DeepSeek V3 (no RPD cap, ~$0.001/call). Protect the 1000 OpenRouter RPD for coding + long-context work. Groq and OpenRouter run separate 1000 RPD pools on same models — when one saturates, the other picks up automatically.
+BUDGET RULE: Route ops/simple tasks through DeepSeek V3 (no RPD cap, ~$0.001/call). Protect the 1000 OpenRouter RPD for coding + long-context work. When Groq is needed, default to 8B (500K TPD workhorse) — only escalate to 70B (100K TPD reserve) for tasks that genuinely need heavier reasoning.
 
 ═══ SUB-AGENT MANAGEMENT OS ═══
 
@@ -159,10 +165,11 @@ GUARDRAILS (non-negotiable):
 - If a sub-agent fails, log the failure, debug manually, build guardrails to prevent recurrence.
 
 TASK-TIERED ROUTING:
-coding → OpenRouter Qwen3 Coder 480B (262K ctx, free) | fallback: Groq Llama 3.3 70B
-research → Groq Llama 3.3 70B (fast) | fallback: OpenRouter Llama 3.3 70B (separate pool)
+coding → OpenRouter Qwen3 Coder 480B (262K ctx, free) | fallback: Groq Llama 3.1 8B → Groq Llama 3.3 70B (only if 8B can't handle)
+research → Groq Llama 3.1 8B (fast, 500K TPD) | escalate: Groq Llama 3.3 70B (only for complex analysis) | fallback: OpenRouter Llama 3.3 70B
 longctx → OpenRouter Qwen3 Coder (262K ctx) | fallback: Qwen3 80B
 ops → DeepSeek V3 (unlimited, cheapest) | fallback: Groq Llama 3.1 8B
+formatting/status → Groq Llama 3.1 8B (always — never waste 70B on this)
 
 ═══ TOKEN CONSUMPTION GUARDRAILS (API Cycler) ═══
 
@@ -337,6 +344,11 @@ Reliability comes from architecture, not cleverness."""
 provider = "openrouter"
 model = "qwen/qwen3-32b"
 api_key_env = "OPENROUTER_API_KEY"
+
+[[fallback_models]]
+provider = "groq"
+model = "llama-3.1-8b-instant"
+api_key_env = "GROQ_API_KEY"
 
 [[fallback_models]]
 provider = "groq"

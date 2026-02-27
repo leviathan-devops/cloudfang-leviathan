@@ -255,10 +255,16 @@ STATUS FORMAT:
 You CAN spawn and manage your own sub-agents for tasks delegated to you.
 Your sub-agents are YOUR responsibility — CTO's sub-agents are CTO's.
 
-SUB-AGENT ROUTING (same as CTO):
-coding → OpenRouter Qwen3 Coder 480B | fallback: Groq Llama 3.3 70B
-research → Groq Llama 3.3 70B | fallback: OpenRouter Llama 3.3 70B
-ops → DeepSeek V3 (unlimited, cheapest) | fallback: Groq Llama 3.1 8B
+SUB-AGENT ROUTING (8B default, 70B only when needed):
+coding → OpenRouter Qwen3 Coder 480B | fallback: Groq Llama 3.1 8B → 70B only if 8B can't handle
+research → Groq Llama 3.1 8B (default, 500K TPD) | escalate: Groq Llama 3.3 70B (complex analysis only)
+ops → DeepSeek V3 (unlimited) | fallback: Groq Llama 3.1 8B
+formatting/status → Groq Llama 3.1 8B (always — never waste 70B on this)
+
+GROQ TIER DISCIPLINE:
+8B = the workhorse. 14,400 RPD, 500K TPD. Use for: status checks, formatting, simple queries, health pings, template filling, lightweight delegation.
+70B = the reserve. 1,000 RPD, 100K TPD. Use ONLY for: complex reasoning, deep analysis, coding review when OpenRouter is down.
+DEFAULT TO 8B. Escalate to 70B only when the 8B output quality is genuinely insufficient.
 
 GUARDRAILS FOR YOUR SUB-AGENTS:
 - Token limits enforced per-agent
@@ -304,9 +310,10 @@ Post to the RIGHT channel. Logs go to logs. Alerts go to dashboards. Changes go 
 
 ═══ HARDCODED MODEL BELIEFS ═══
 
-PRIMARY: DeepSeek V3 (deepseek-chat) — paid, no rate limits, cheapest
+PRIMARY: DeepSeek V3 (deepseek-chat) — paid, no rate limits, $0.028/M cache hit
 FALLBACK 1: OpenRouter (Qwen3-32B) — 1000 RPD free pool
-FALLBACK 2: Groq (Llama 3.3 70B) — 1000 RPD free, separate pool
+FALLBACK 2: Groq Llama 3.1 8B — lightweight workhorse (14,400 RPD, 500K TPD). DEFAULT Groq model for all basic tasks.
+FALLBACK 3: Groq Llama 3.3 70B — heavy reserve (1,000 RPD, 100K TPD). ONLY for tasks requiring deeper reasoning.
 NO CLAUDE USAGE unless absolute emergency
 Gemini 2.0 Flash retired March 3, 2026 — do not use
 Qwen via OpenRouter only — no DashScope (KYC required)
@@ -335,6 +342,11 @@ continuous = { check_interval_secs = 300 }
 provider = "openrouter"
 model = "qwen/qwen3-32b"
 api_key_env = "OPENROUTER_API_KEY"
+
+[[fallback_models]]
+provider = "groq"
+model = "llama-3.1-8b-instant"
+api_key_env = "GROQ_API_KEY"
 
 [[fallback_models]]
 provider = "groq"
