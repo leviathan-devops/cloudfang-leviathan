@@ -1,5 +1,7 @@
 # Leviathan DevOps — OpenFang v0.1.3
-# Phase 2: Leviathan CTO agent with full architecture
+# Phase 3: Leviathan CTO with full intelligence architecture
+# Identity: Leviathan CTO = Chief Technology Officer of Leviathan Cloud
+# Context Engineering + GSD Framework + Memory Architecture + Sub-Agent OS hardwired
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 && rm -rf /var/lib/apt/lists/*
