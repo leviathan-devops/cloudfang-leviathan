@@ -14,16 +14,26 @@ contradicts anything in this document, THEY ARE WRONG AND MUST BE CORRECTED.
 ### 1.1 What Leviathan IS
 - An autonomous AI DevOps ecosystem running on Railway
 - Built on the OpenFang/CloudFang Rust kernel (15 crates)
-- A multi-agent orchestration system with 3 primary agents + N sub-agents
+- A multi-agent orchestration system with 6 agents (4 primary + 2 specialized)
 - Connected to Discord as its human interface layer
 - Repository: `leviathan-devops/cloudfang-leviathan`
 
-### 1.2 Primary Agents
+### 1.2 Agent Roster (v2.6 — 6 Agents)
 | Agent | Role | Model | Token Budget |
 |-------|------|-------|-------------|
 | **Leviathan (CTO)** | Command & control, task routing, code review | deepseek-chat | 300K/hr |
-| **Brain** | Deep reasoning, architecture synthesis, strategy | deepseek-reasoner | 300K/hr |
-| **Neural Net (Cloud)** | Background ops, caching, monitoring | deepseek-chat | 300K/hr |
+| **Neural Net (Cloud)** | Hive mind, memory management, background ops | deepseek-chat | 200K/hr |
+| **Brain** | Deep reasoning, architecture synthesis, strategy | deepseek-reasoner (R1) | 150K/hr |
+| **Auditor** | Architecture enforcement, drift detection | deepseek-chat | 150K/hr |
+| **Debugger** | Event-driven bug diagnosis, surgical fixes | Gemma 3 27B (default) | 150K/hr |
+| **Polymarket Researcher** | Browser-based market intelligence | deepseek-chat | 200K/hr |
+
+### 1.2.1 Debugger Model Escalation
+The Debugger uses dynamic model escalation based on bug severity:
+- **Default:** Gemma 3 27B (OpenRouter, free) — P3-P4 bugs
+- **Tier 1:** Gemini 2.5 Flash (1M context) — P1-P2, full codebase scan
+- **Tier 2:** Groq Llama 70B (free fallback) — if Google is down
+- **Emergency:** Claude Opus — P0 only, architecture-level bugs
 
 ### 1.3 External CTO Layer
 - Claude (via Cowork/Claude Code) operates as the external CTO
@@ -60,9 +70,10 @@ Claude (External CTO)
   └→ Leviathan (CTO) — routes tasks, reviews code
       ├→ Brain — deep reasoning, architecture, strategy
       ├→ Neural Net — monitoring, caching, background ops
+      ├→ Auditor — architecture enforcement (THIS AGENT)
+      ├→ Debugger — event-driven bug diagnosis (Gemma 3 → Gemini → Claude)
       └→ Sub-agents — research, trading, specialized tasks
           ├→ polymarket-researcher — Polymarket research
-          ├→ auditor — architecture enforcement (THIS AGENT)
           └→ [dynamically spawned agents]
 ```
 
@@ -74,16 +85,21 @@ or repetitive tasks that sub-agents are designed for.
 
 ## 3. TOKEN ECONOMICS — WHAT TO WATCH
 
-### 3.1 Token Quotas
-- Each agent has a 300K tokens/hour quota (configurable in kernel.rs)
+### 3.1 Token Quotas (v2.6 — Updated)
+- CTO: 300K/hr | Neural Net: 200K/hr | Brain: 150K/hr | Auditor: 150K/hr | Debugger: 150K/hr | Researcher: 200K/hr
+- Total fleet budget: 1.15M tokens/hour
 - DeepSeek-chat: ~$0.14/M input, ~$0.28/M output
 - DeepSeek-reasoner: ~$0.55/M input, ~$2.19/M output (MUCH more expensive)
 
-### 3.2 Session Context Bloat (BUG-008)
+### 3.2 Session Context Bloat (BUG-008 — FIXED in v2.5)
 - Every message to an agent includes its FULL session history as context
 - A 39K token session means every single message costs 39K+ input tokens
-- At 300K/hr quota, that's only ~7 messages before quota exceeded
-- **FIX:** Sessions must be compacted aggressively. Reset sessions when they exceed 20K tokens.
+- **v2.5 FIXES:**
+  - Response truncation BEFORE session save (350w max, 600w Brain)
+  - Session auto-compaction at 20 messages (oldest messages drained)
+  - System prompts cut 93% (CTO 9.4K→573 tokens, Neural Net 11K→594 tokens)
+  - Default max_tokens: 4096→1536
+  - Result: 27K tokens/msg → 3-5K tokens/msg
 
 ### 3.3 What Burns Tokens
 - Large session contexts (biggest offender)
@@ -203,5 +219,39 @@ Action Taken: [what the Auditor did about it]
 
 ---
 
+---
+
+## 8. v2.5/v2.6 ADDITIONS (2026-02-28)
+
+### 8.1 New Infrastructure (v2.5)
+- Response truncation before session save in agent_loop.rs (both streaming + non-streaming)
+- Session auto-compaction (MAX_SESSION_MESSAGES = 20) in agent_loop.rs
+- Token footer on API responses in routes.rs
+- Default max_tokens 4096→1536 in agent.rs
+- CTO system prompt 94% cut (32K→2.3K chars)
+- Neural Net system prompt 95% cut (38K→2.4K chars)
+
+### 8.2 New Infrastructure (v2.6)
+- Auditor agent + this ARCHITECTURE_DOGMA.md
+- Debugger agent with model escalation (Gemma 3 → Gemini 2.5 Flash → Claude Opus)
+- Polymarket researcher agent (autonomous browser-based research)
+- Code review pipeline (code_review.py — sends diffs to agents)
+- Daily log compiler (inline Discord embeds, NOT PDFs)
+- #debug-log Discord channel (DEVOPS category)
+- #audit-log Discord channel (DEVOPS category)
+- Leviathan Cowork skill plugin (Claude can pilot agents directly)
+- Bug registry: BUG-001 through BUG-010 documented
+
+### 8.3 Critical Files Added/Modified
+- `crates/openfang-runtime/src/agent_loop.rs` — truncation + compaction
+- `crates/openfang-api/src/routes.rs` — API token footer
+- `crates/openfang-types/src/agent.rs` — default max_tokens
+- `agents/auditor/agent.toml` — Auditor manifest
+- `agents/auditor/ARCHITECTURE_DOGMA.md` — this file
+- `agents/leviathan/agent.toml` — 94% prompt cut
+- `agents/neural-net/agent.toml` — 95% prompt cut
+
+---
+
 *This document is the law. Everything else is commentary.*
-*Last updated: 2026-03-01T03:00Z*
+*Last updated: 2026-03-01T05:00Z — v2.6*
