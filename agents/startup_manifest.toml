@@ -1,0 +1,40 @@
+# LEVIATHAN STARTUP MANIFEST
+# =========================
+# All agents listed here will be auto-spawned on kernel boot.
+# The kernel reads this file during initialization and spawns any
+# agents that don't already exist (idempotent).
+#
+# This fixes BUG-007: Dynamic agents lost on Railway deploy.
+#
+# Format: Each [[agent]] block maps directly to agent.toml format.
+# The kernel iterates through all blocks and calls spawn_agent() for each.
+
+[[agent]]
+name = "leviathan"
+manifest_path = "agents/leviathan/agent.toml"
+required = true  # System won't start without this agent
+
+[[agent]]
+name = "neural-net"
+manifest_path = "agents/neural-net/agent.toml"
+required = true
+
+[[agent]]
+name = "brain"
+manifest_path = "agents/brain/agent.toml"
+required = true
+
+[[agent]]
+name = "auditor"
+manifest_path = "agents/auditor/agent.toml"
+required = false  # System can start without, but should spawn ASAP
+
+[[agent]]
+name = "debugger"
+manifest_path = "agents/debugger/agent.toml"
+required = false
+
+[[agent]]
+name = "polymarket-researcher"
+manifest_path = "agents/polymarket-researcher/agent.toml"
+required = false

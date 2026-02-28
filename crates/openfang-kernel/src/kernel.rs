@@ -36,6 +36,26 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
 use tracing::{debug, info, warn};
 
+/// Startup manifest entry — maps agent name to its manifest file path.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct StartupManifestEntry {
+    /// Agent name (must match the "name" field in agent.toml).
+    name: String,
+    /// Path to agent.toml (relative to project root, e.g., "agents/leviathan/agent.toml").
+    manifest_path: String,
+    /// If true, kernel boot will fail if this agent cannot be spawned.
+    #[serde(default)]
+    required: bool,
+}
+
+/// Startup manifest — lists all agents to auto-spawn on kernel boot.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct StartupManifest {
+    /// List of agents to auto-spawn.
+    #[serde(default)]
+    agent: Vec<StartupManifestEntry>,
+}
+
 /// The main OpenFang kernel — coordinates all subsystems.
 pub struct OpenFangKernel {
     /// Kernel configuration.
@@ -921,6 +941,9 @@ impl OpenFangKernel {
             }
         }
 
+        // Auto-spawn missing agents from startup_manifest.toml (BUG-007 fix)
+        kernel.auto_spawn_missing_agents()?;
+
         // Validate routing configs against model catalog
         for entry in kernel.registry.list() {
             if let Some(ref routing_config) = entry.manifest.routing {
@@ -1073,6 +1096,163 @@ impl OpenFangKernel {
         let _triggered = self.triggers.evaluate(&event);
 
         Ok(agent_id)
+    }
+
+    /// Auto-spawn missing agents from startup_manifest.toml (BUG-007 fix).
+    ///
+    /// Reads the startup manifest (if it exists), and for each agent listed:
+    /// 1. Checks if an agent with that name is already registered
+    /// 2. If not, loads the agent.toml manifest from agents/{name}/agent.toml
+    /// 3. Spawns the agent
+    ///
+    /// This is idempotent: agents that already exist are skipped.
+    fn auto_spawn_missing_agents(&self) -> KernelResult<()> {
+        // Look for startup_manifest.toml in the same directory as where agents/ is located.
+        // This is typically the project root or config.home_dir.
+        // Try multiple locations: home_dir first, then parents, then fallback to config.home_dir
+        let startup_manifest_paths = vec![
+            self.config.home_dir.join("startup_manifest.toml"),
+            self.config.home_dir.join("agents/startup_manifest.toml"),
+            PathBuf::from("startup_manifest.toml"),
+            PathBuf::from("agents/startup_manifest.toml"),
+        ];
+
+        let manifest_path = startup_manifest_paths
+            .iter()
+            .find(|p| p.exists())
+            .copied();
+
+        if manifest_path.is_none() {
+            debug!("startup_manifest.toml not found — skipping auto-spawn");
+            return Ok(());
+        }
+
+        let manifest_path = manifest_path.unwrap();
+        debug!(path = ?manifest_path, "Loading startup_manifest.toml");
+
+        let manifest_content = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| {
+                KernelError::OpenFang(OpenFangError::Config(format!(
+                    "Failed to read startup_manifest.toml: {e}"
+                )))
+            })?;
+
+        // Parse the startup manifest TOML
+        let startup_manifest: StartupManifest = toml::from_str(&manifest_content)
+            .map_err(|e| {
+                KernelError::OpenFang(OpenFangError::Config(format!(
+                    "Failed to parse startup_manifest.toml: {e}"
+                )))
+            })?;
+
+        let agents_dir = manifest_path
+            .parent()
+            .unwrap_or(&self.config.home_dir)
+            .join("agents");
+
+        // Track which agents we spawn
+        let mut spawned = Vec::new();
+        let mut failed = Vec::new();
+
+        for agent_entry in &startup_manifest.agent {
+            // Check if agent already exists in registry
+            if self.registry.list().iter().any(|a| a.name == agent_entry.name) {
+                debug!(agent = %agent_entry.name, "Agent already registered — skipping");
+                continue;
+            }
+
+            // Load manifest from agents/{name}/agent.toml
+            let agent_manifest_path = agents_dir.join(&agent_entry.name).join("agent.toml");
+
+            if !agent_manifest_path.exists() {
+                let msg = format!(
+                    "Agent manifest not found at {}",
+                    agent_manifest_path.display()
+                );
+                warn!(agent = %agent_entry.name, "{msg}");
+                failed.push((agent_entry.name.clone(), msg));
+                continue;
+            }
+
+            let agent_toml_content = match std::fs::read_to_string(&agent_manifest_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    let msg = format!("Failed to read agent manifest: {e}");
+                    warn!(agent = %agent_entry.name, "{msg}");
+                    failed.push((agent_entry.name.clone(), msg));
+                    continue;
+                }
+            };
+
+            // Parse TOML into AgentManifest
+            let manifest: AgentManifest = match toml::from_str(&agent_toml_content) {
+                Ok(m) => m,
+                Err(e) => {
+                    let msg = format!("Failed to parse agent manifest: {e}");
+                    warn!(agent = %agent_entry.name, "{msg}");
+                    failed.push((agent_entry.name.clone(), msg));
+                    continue;
+                }
+            };
+
+            // Spawn the agent
+            match self.spawn_agent(manifest) {
+                Ok(agent_id) => {
+                    info!(
+                        agent = %agent_entry.name,
+                        id = %agent_id,
+                        "Auto-spawned missing agent"
+                    );
+                    spawned.push(agent_entry.name.clone());
+                }
+                Err(e) => {
+                    let msg = format!("Failed to spawn agent: {e}");
+                    if agent_entry.required {
+                        warn!(
+                            agent = %agent_entry.name,
+                            "REQUIRED agent failed to spawn: {msg}"
+                        );
+                        failed.push((agent_entry.name.clone(), msg));
+                    } else {
+                        warn!(agent = %agent_entry.name, "{msg}");
+                        failed.push((agent_entry.name.clone(), msg));
+                    }
+                }
+            }
+        }
+
+        if !spawned.is_empty() {
+            info!(
+                "Auto-spawned {} missing agent(s): {}",
+                spawned.len(),
+                spawned.join(", ")
+            );
+        }
+
+        if !failed.is_empty() {
+            // Check if any required agents failed
+            let required_failed: Vec<_> = startup_manifest
+                .agent
+                .iter()
+                .filter(|a| {
+                    a.required && failed.iter().any(|(name, _)| &a.name == name)
+                })
+                .collect();
+
+            if !required_failed.is_empty() {
+                return Err(KernelError::BootFailed(format!(
+                    "Failed to auto-spawn {} required agent(s)",
+                    required_failed.len()
+                )));
+            } else {
+                warn!(
+                    "Failed to auto-spawn {} optional agent(s)",
+                    failed.len()
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Verify a signed manifest envelope (Ed25519 + SHA-256).
