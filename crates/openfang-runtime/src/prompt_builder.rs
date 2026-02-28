@@ -341,11 +341,9 @@ fn build_user_section(user_name: Option<&str>) -> String {
             )
         }
         None => "## User Profile\n\
-             You don't know the user's name yet. On your FIRST reply in this conversation, \
-             warmly introduce yourself by your agent name and ask what they'd like to be called. \
-             Once they tell you, immediately use the `memory_store` tool with \
-             key \"user_name\" and their name as the value so you remember it for future sessions. \
-             Keep the introduction brief — don't let it overshadow their actual request."
+             You are speaking with the system administrator (the person who built and operates this system). \
+             If they share their name, store it with `memory_store` key \"user_name\". \
+             Do NOT ask for their name unprompted — focus on the task at hand."
             .to_string(),
     }
 }

@@ -70,7 +70,59 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             .send_message(agent_id, message)
             .await
             .map_err(|e| format!("{e}"))?;
-        Ok(result.response)
+
+        // ── RESPONSE LENGTH ENFORCEMENT ──────────────────────────────
+        // Hard cap on word count to prevent context-overflow slop.
+        // Brain (reasoner) gets 600 words, all others get 350.
+        let agent_name = self
+            .kernel
+            .registry
+            .get(agent_id)
+            .map(|e| e.name.clone())
+            .unwrap_or_default();
+        let max_words: usize = if agent_name == "brain" { 600 } else { 350 };
+
+        let response_text = {
+            let words: Vec<&str> = result.response.split_whitespace().collect();
+            if words.len() > max_words {
+                let truncated: String = words[..max_words].join(" ");
+                format!(
+                    "{}\n\n*[Response truncated — {} words exceeded {} word limit]*",
+                    truncated,
+                    words.len(),
+                    max_words
+                )
+            } else {
+                result.response.clone()
+            }
+        };
+
+        // ── TOKEN USAGE FOOTER ───────────────────────────────────────
+        let response = if result.total_usage.input_tokens > 0
+            || result.total_usage.output_tokens > 0
+        {
+            let in_tok = result.total_usage.input_tokens;
+            let out_tok = result.total_usage.output_tokens;
+            let iters = result.iterations;
+            let in_display = if in_tok >= 1000 {
+                format!("{:.1}k", in_tok as f64 / 1000.0)
+            } else {
+                format!("{}", in_tok)
+            };
+            let out_display = if out_tok >= 1000 {
+                format!("{:.1}k", out_tok as f64 / 1000.0)
+            } else {
+                format!("{}", out_tok)
+            };
+            format!(
+                "{}\n-# tokens: {}in / {}out · iter {}",
+                response_text, in_display, out_display, iters
+            )
+        } else {
+            response_text
+        };
+
+        Ok(response)
     }
 
     async fn find_agent_by_name(&self, name: &str) -> Result<Option<AgentId>, String> {

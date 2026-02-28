@@ -470,6 +470,32 @@ async fn parse_discord_message(
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .unwrap_or_else(chrono::Utc::now);
 
+    // ── REPLY CONTEXT ─────────────────────────────────────────────
+    // When a user replies to another message, extract the referenced
+    // message content so the agent has context about what was said.
+    let mut reply_context = String::new();
+    if let Some(ref_msg) = d.get("referenced_message").and_then(|v| v.as_object()) {
+        let ref_content = ref_msg
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        let ref_author = ref_msg
+            .get("author")
+            .and_then(|a| a.get("username"))
+            .and_then(|u| u.as_str())
+            .unwrap_or("Unknown");
+        if !ref_content.is_empty() {
+            reply_context = format!("[Replying to {ref_author}: \"{ref_content}\"]\n\n");
+        }
+    }
+
+    // Prepend reply context to the content_text
+    let full_text = if reply_context.is_empty() {
+        content_text.to_string()
+    } else {
+        format!("{reply_context}{content_text}")
+    };
+
     // Parse commands (messages starting with /)
     let content = if content_text.starts_with('/') {
         let parts: Vec<&str> = content_text.splitn(2, ' ').collect();
@@ -484,7 +510,7 @@ async fn parse_discord_message(
             args,
         }
     } else {
-        ChannelContent::Text(content_text.to_string())
+        ChannelContent::Text(full_text)
     };
 
     Some(ChannelMessage {
