@@ -198,8 +198,8 @@ ARCH_KEYWORDS = ['design', 'architect', 'structure', 'system', 'scale', 'infra',
                  'microservice', 'pipeline', 'diagram']
 RESEARCH_KEYWORDS = ['research', 'compare', 'explain', 'what is', 'how does', 'best practice', 'alternative',
                      'library', 'framework', 'benchmark', 'why', 'difference', 'tradeoff']
-REVIEW_KEYWORDS = ['review', 'audit', 'check', 'bug', 'security', 'vulnerability', 'test', 'edge case']
-DEBUG_KEYWORDS = ['debug', 'error', 'crash', 'trace', 'stacktrace', 'exception', 'broken', 'failing', 'diagnose', 'root cause', 'scan']
+REVIEW_KEYWORDS = ['review', 'audit', 'code review', 'security', 'vulnerability', 'edge case', 'lint']
+DEBUG_KEYWORDS = ['debug', 'error', 'crash', 'trace', 'stacktrace', 'exception', 'broken', 'failing', 'diagnose', 'root cause', 'scan', 'bug', 'test']
 
 
 def classify_task(msg):
