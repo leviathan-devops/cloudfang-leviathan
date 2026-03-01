@@ -45,6 +45,9 @@ COPY discord_bridge.py /root/discord_bridge.py
 # Copy Memory Manager daemon (DMM + Context Caching + Knowledge Harvesting)
 COPY memory_manager.py /root/memory_manager.py
 
+# Copy Update Scanner bot (GitHub release monitoring, notification only)
+COPY update_scanner.py /root/update_scanner.py
+
 # Full Leviathan config — DeepSeek V3 primary, OpenRouter + Groq fallbacks
 # Port injected at runtime from Railway's $PORT env var
 RUN cat > /root/.openfang/config.toml.template << 'TOML'
@@ -248,6 +251,14 @@ export DMM_HEALTH_PORT="4201"
 python3 /root/memory_manager.py &
 DMM_PID=$!
 echo "Memory Manager started (PID: $DMM_PID) — DMM + Cache + Harvesting"
+
+# ─── UPDATE SCANNER: GitHub release monitoring ───
+# Checks RightNow-AI/openfang every 24h, notifies Discord on new releases.
+# NEVER auto-updates. Port 4202 health endpoint.
+export CURRENT_VERSION="v0.2.3"
+python3 /root/update_scanner.py &
+SCANNER_PID=$!
+echo "Update Scanner started (PID: $SCANNER_PID) — monitoring OpenFang releases"
 
 # ─── DISCORD BRIDGE v2.0: Cloud & Brain bots + Slash Commands ───
 # Upstream OpenFang binary only supports one Discord bot (CTO).

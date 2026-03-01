@@ -155,7 +155,13 @@ class DynamicMemoryManager:
             conn.close()
 
     def run_cycle(self) -> dict:
-        """Run a complete DMM cycle: quota enforcement, tier management, decay, pruning."""
+        """Run a complete DMM cycle: quota enforcement, tier management, decay, pruning.
+
+        ATOMICITY (P0 fix from Auditor review):
+        Each agent's tier operations run inside a single transaction.
+        If any operation fails, the entire agent's changes are rolled back.
+        This prevents partial tier state corruption.
+        """
         conn = self._connect()
         stats = {
             "promoted": 0,
@@ -173,27 +179,42 @@ class DynamicMemoryManager:
             ).fetchall()
 
             for (agent_id,) in agents:
-                agent_stats = self._process_agent(conn, agent_id, now)
-                for k, v in agent_stats.items():
-                    stats[k] = stats.get(k, 0) + v
+                # Each agent processed in its own transaction for atomicity
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    agent_stats = self._process_agent(conn, agent_id, now)
+                    conn.execute("COMMIT")
+                    for k, v in agent_stats.items():
+                        stats[k] = stats.get(k, 0) + v
+                except Exception as e:
+                    conn.execute("ROLLBACK")
+                    log.error(f"DMM failed for agent {agent_id[:8]}: {e}")
 
             # 2. Global cold tier pruning (memories below threshold AND old)
+            # Uses OR condition per Auditor recommendation for better safety
             cutoff = (datetime.now(timezone.utc) - timedelta(days=COLD_PRUNE_DAYS)).isoformat()
-            pruned = conn.execute(
-                """UPDATE memories SET deleted = 1
-                   WHERE tier = 'cold' AND confidence < ? AND accessed_at < ?
-                   AND deleted = 0""",
-                (COLD_CONFIDENCE_THRESHOLD, cutoff),
-            ).rowcount
-            stats["pruned"] += pruned
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                pruned = conn.execute(
+                    """UPDATE memories SET deleted = 1
+                       WHERE tier = 'cold'
+                       AND (confidence < ? OR accessed_at < ?)
+                       AND deleted = 0""",
+                    (COLD_CONFIDENCE_THRESHOLD, cutoff),
+                ).rowcount
+                stats["pruned"] += pruned
+                conn.execute("COMMIT")
+            except Exception as e:
+                conn.execute("ROLLBACK")
+                log.error(f"Cold prune failed: {e}")
 
             # 3. Log the cycle
             conn.execute(
                 "INSERT INTO dmm_log (cycle_at, action, count, details) VALUES (?, 'full_cycle', ?, ?)",
                 (now, sum(stats.values()), json.dumps(stats)),
             )
-
             conn.commit()
+
             log.info(
                 f"DMM cycle complete: promoted={stats['promoted']}, "
                 f"demoted={stats['demoted']}, decayed={stats['decayed']}, "
@@ -201,7 +222,10 @@ class DynamicMemoryManager:
             )
         except Exception as e:
             log.error(f"DMM cycle error: {e}")
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         finally:
             conn.close()
 
