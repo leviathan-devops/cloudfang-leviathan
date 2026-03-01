@@ -77,9 +77,38 @@ database_path = "/data/memory.db"
 knowledge_path = "/data/knowledge/"
 
 [compaction]
+# T1 (hot memory / per-session) context liquidity:
+# - Only keep last 5 raw messages in immediate context (keep_recent)
+# - Summarize to ~500 tokens (max_summary_tokens) for semantic context tokens
+# - This ensures T1 stays lean while T2 (SQLite) holds full prompts/details
 threshold = 20
-keep_recent = 20
-max_summary_tokens = 1024
+keep_recent = 5
+max_summary_tokens = 512
+base_chunk_ratio = 0.4
+min_chunk_ratio = 0.15
+safety_margin = 1.2
+summarization_overhead_tokens = 4096
+max_chunk_chars = 80000
+max_retries = 3
+token_threshold_ratio = 0.7
+context_window_tokens = 200000
+
+# Context overflow recovery thresholds (protect T1 from bloat)
+# Stage 1: moderate trim to last 10 messages (70% threshold)
+# Stage 2: aggressive trim to last 4 messages (90% threshold)
+# Stage 3: truncate tool results to 2K chars each
+# These cascade to recover from context bloat automatically
+
+[context_budget]
+# T1 (hot memory) budget: 30% of context window per tool result
+# Tool results are denser, so we cap them at 30% to preserve room for messages
+tool_result_cap_percent = 30
+# Single result absolute max: 50% of context window (safety valve)
+single_result_max_percent = 50
+# Total tool result headroom: 75% of context window (trigger compaction)
+total_tool_headroom_percent = 75
+# Compact tool results to 2K chars when headroom exceeded (Stage 3 recovery)
+compact_to_chars = 2000
 
 # ─── BOT 1: LEVIATHAN CTO ───
 # Responds ONLY to DMs and @mentions. Does NOT respond to general channel messages.
@@ -145,7 +174,27 @@ RUN cat > /root/start.sh << 'SCRIPT'
 #!/bin/sh
 PORT_VAL=${PORT:-4200}
 sed "s/PORT_PLACEHOLDER/$PORT_VAL/" /root/.openfang/config.toml.template > /root/.openfang/config.toml
-sed -i 's/threshold = 80/threshold = 20/' /root/.openfang/config.toml
+
+# ─── SEMANTIC CONTEXT LIQUIDITY ENFORCEMENT ───
+# T1 (hot memory / per-session) holds ONLY semantic context tokens (~500 token summary)
+# T2 (warm SQLite) holds full prompts, messages, and details for recovery
+#
+# Three-tier recovery pipeline:
+# - Stage 1: Moderate trim to last 10 messages (70% threshold)
+# - Stage 2: Aggressive trim to last 4 messages (90% threshold)
+# - Stage 3: Truncate tool results to 2K chars (overflow recovery)
+#
+# These sed commands enforce context liquidity guardrails as safety nets:
+sed -i 's/keep_recent = .*/keep_recent = 5/' /root/.openfang/config.toml
+sed -i 's/max_summary_tokens = .*/max_summary_tokens = 512/' /root/.openfang/config.toml
+sed -i 's/threshold = [0-9]*/threshold = 20/' /root/.openfang/config.toml
+sed -i 's/token_threshold_ratio = .*/token_threshold_ratio = 0.7/' /root/.openfang/config.toml
+sed -i 's/context_window_tokens = .*/context_window_tokens = 200000/' /root/.openfang/config.toml
+
+# Per-agent context budget enforcement (override via environment variables if needed)
+# Default: 500K tokens/hour per primary agent (CTO, Neural Net, Brain, Auditor, Debugger)
+export MAX_CONTEXT_TOKENS_PER_AGENT="${MAX_CONTEXT_TOKENS_PER_AGENT:-500000}"
+echo "Context liquidity enforced: keep_recent=5, max_summary_tokens=512, per-agent_budget=$MAX_CONTEXT_TOKENS_PER_AGENT"
 
 # Ensure persistent volume directories exist (Railway volume mounted at /data)
 mkdir -p /data/knowledge /data/logs /data/backups /data/github-sync
