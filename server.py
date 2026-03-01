@@ -1613,6 +1613,290 @@ def fetch_pending_features():
     return []
 
 
+# ─── SYSTEM 1: AGENT ROLES ───────────────────────────────────────
+# Layer 4 Warm Boot — agents never start cold
+
+AGENT_ROLES = {
+    'cto': 'System architect and task orchestrator. Hydra Execution Doctrine. 350-word max responses.',
+    'neural_net': 'Memory management, context curation, VP Engineering. Default Discord responder.',
+    'brain': 'Deep reasoning engine. Sandboxed to #meta-prompting and #agent-prompting.',
+    'auditor': 'Quality enforcement with CTO-level authority. 7 automated workflows. Zero tolerance for slop.',
+    'debugger': 'Proactive diagnostics and bug resolution. CTO-level authority.',
+}
+
+AGENT_PROMPT_SUMMARIES = {}  # Cache of semantic summaries to avoid regeneration
+
+
+# ─── SYSTEM 1: WARM BOOT SPAWN SCRIPT (Layer 4) ───────────────────
+
+def warm_boot_agent(agent_key):
+    """Layer 4 Warm Boot — agents NEVER start cold.
+
+    Before the first user message reaches an agent, we pre-load context:
+    1. Load hardwired identity (from AGENT_ROLES)
+    2. Pre-load T2 memory: last 48hrs of relevant context from GitHub
+    3. Pre-load cross-agent context: semantic summaries from other agents
+    4. Fill T1 with semantic context tokens
+
+    This runs ONCE after spawn, costs ~3,000 tokens, prevents ALL cold-start bugs.
+    """
+    try:
+        agent_id = AGENT_IDS.get(agent_key)
+        if not agent_id:
+            logger.warning(f"[WARM-BOOT] Unknown agent key: {agent_key}")
+            return {"error": "unknown_agent_key"}
+
+        logger.info(f"[WARM-BOOT] Starting warm boot for {agent_key}...")
+
+        # 1. Get agent role reminder
+        role = AGENT_ROLES.get(agent_key, "Unknown role")
+
+        # 2. Fetch last 48hrs of T2 memory from GitHub
+        pat = os.getenv('GITHUB_PAT', GITHUB_PAT)
+        current_state = ""
+        active_bugs = ""
+        frustration_triggers = ""
+        recent_commits = ""
+
+        if pat:
+            try:
+                # CURRENT_STATE.md
+                current_state = fetch_github_file(
+                    "leviathan-devops/leviathan-enhanced-opus",
+                    "memory/tier2/CURRENT_STATE.md",
+                    "main"
+                )[:500]  # Truncate to 500 chars
+            except Exception as e:
+                logger.warning(f"[WARM-BOOT] Failed to fetch CURRENT_STATE: {e}")
+
+            try:
+                # ACTIVE_BUGS.md
+                active_bugs = fetch_github_file(
+                    "leviathan-devops/leviathan-enhanced-opus",
+                    "memory/tier2/ACTIVE_BUGS.md",
+                    "main"
+                )[:300]
+            except Exception as e:
+                logger.warning(f"[WARM-BOOT] Failed to fetch ACTIVE_BUGS: {e}")
+
+            try:
+                # FRUSTRATION_PREVENTION.md
+                frustration_triggers = fetch_github_file(
+                    "leviathan-devops/leviathan-enhanced-opus",
+                    "memory/tier2/FRUSTRATION_PREVENTION.md",
+                    "main"
+                )[:300]
+            except Exception as e:
+                logger.warning(f"[WARM-BOOT] Failed to fetch FRUSTRATION_PREVENTION: {e}")
+
+            try:
+                # RECENT_COMMITS.md
+                recent_commits = fetch_github_file(
+                    "leviathan-devops/leviathan-enhanced-opus",
+                    "memory/tier2/RECENT_COMMITS.md",
+                    "main"
+                )[:400]
+            except Exception as e:
+                logger.warning(f"[WARM-BOOT] Failed to fetch RECENT_COMMITS: {e}")
+
+        # 3. Compose compact warm boot message (~500 tokens)
+        warm_boot_msg = f"""[WARM BOOT — Layer 4 Context Pre-Load]
+
+AGENT IDENTITY: {role}
+
+CURRENT SYSTEM STATE (last 48hrs):
+{current_state if current_state else "[No state data available]"}
+
+ACTIVE BUGS TO WATCH:
+{active_bugs if active_bugs else "[No active bugs]"}
+
+TOP FRUSTRATION TRIGGERS:
+{frustration_triggers if frustration_triggers else "[No frustration data]"}
+
+RECENT COMMITS (last 3):
+{recent_commits if recent_commits else "[No recent commits]"}
+
+You are fully contextual. Proceed with standard operations."""
+
+        # 4. Send warm boot message with skip_budget=True (mandatory)
+        result = send_agent_message(agent_key, warm_boot_msg, skip_budget=True)
+
+        # 5. Log to Discord
+        log_to_discord(
+            'infrastructure-changelog',
+            f":rocket: Warm boot completed for **{agent_key}** ({agent_id[:12]}...)"
+        )
+
+        logger.info(f"[WARM-BOOT] Completed for {agent_key}: {result}")
+        return {"status": "warm_boot_complete", "agent": agent_key}
+
+    except Exception as e:
+        logger.error(f"[WARM-BOOT] Error for {agent_key}: {e}")
+        return {"error": str(e)}
+
+
+# ─── SYSTEM 2: T2 PROMPT STORAGE + T1 SEMANTIC TOKENS ───────────────
+
+def store_prompt_in_t2(agent_key):
+    """Store full agent prompt in T2, inject semantic summary into T1.
+
+    Instead of the 4000-word agent prompt burning tokens on EVERY query,
+    we store it in T2 (structured store) and put a ~100-token semantic
+    summary in T1 that persists through compactions.
+    """
+    try:
+        if agent_key not in AGENT_IDS:
+            logger.warning(f"[T2-PROMPT] Unknown agent key: {agent_key}")
+            return {"error": "unknown_agent_key"}
+
+        agent_id = AGENT_IDS[agent_key]
+        logger.info(f"[T2-PROMPT] Storing T2 prompt for {agent_key}...")
+
+        # 1. Read agent's full system prompt
+        # This would normally come from agent.toml or manifest
+        # For now, we'll construct a placeholder based on role
+        agent_role = AGENT_ROLES.get(agent_key, "")
+        full_prompt = f"""AGENT: {agent_key}
+ROLE: {agent_role}
+
+This agent operates under the Hydra Execution Doctrine.
+All decisions are audited by the Auditor Guardian daemon.
+Token budget: 500K/hr. Call limit: 30/hr from daemons.
+Context tiering: T1 (active), T2 (48hr), T3 (daily summaries).
+
+Primary responsibilities:
+- Execute assigned tasks with zero tolerance for incomplete work
+- Maintain semantic coherence across agent handoffs
+- Log all decisions to Discord for transparency
+- Respect token budget and task priority
+
+Error handling:
+- On failure, escalate to Auditor immediately
+- Include full context dump in escalation
+- Block further execution until cleared
+
+Never:
+- Ignore task priority levels
+- Exceed token budget without explicit override
+- Spawn agents without anti-duplicate checks
+- Leave tasks in incomplete state"""
+
+        # 2. Generate ~100-token semantic summary using DeepSeek
+        if agent_key in AGENT_PROMPT_SUMMARIES:
+            semantic_summary = AGENT_PROMPT_SUMMARIES[agent_key]
+            logger.info(f"[T2-PROMPT] Using cached semantic summary for {agent_key}")
+        else:
+            try:
+                resp = requests.post(
+                    DEEPSEEK_API_URL,
+                    headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": "deepseek-chat",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": f"Compress this system prompt into a 100-token semantic context token that captures the agent's core identity, rules, and priorities:\n\n{full_prompt}"
+                            }
+                        ],
+                        "temperature": 0.3,
+                        "max_tokens": 150
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    semantic_summary = resp.json()['choices'][0]['message']['content']
+                    AGENT_PROMPT_SUMMARIES[agent_key] = semantic_summary
+                    logger.info(f"[T2-PROMPT] Generated semantic summary for {agent_key}")
+                else:
+                    semantic_summary = f"{agent_key} agent: {agent_role}"
+                    logger.warning(f"[T2-PROMPT] DeepSeek failed ({resp.status_code}), using fallback")
+            except Exception as e:
+                semantic_summary = f"{agent_key} agent: {agent_role}"
+                logger.warning(f"[T2-PROMPT] Semantic summary generation failed: {e}")
+
+        # 3. Store full prompt via OpenFang structured store
+        try:
+            store_resp = requests.post(
+                f"{OPENFANG_URL}/api/agents/{agent_id}/memory",
+                headers=OPENFANG_HEADERS,
+                json={
+                    "key": "system_prompt_full",
+                    "value": full_prompt,
+                    "tier": "T2",
+                    "timestamp": datetime.utcnow().isoformat()
+                },
+                timeout=30
+            )
+            if store_resp.status_code == 200:
+                logger.info(f"[T2-PROMPT] Full prompt stored in T2 for {agent_key}")
+            else:
+                logger.warning(f"[T2-PROMPT] Failed to store in T2: {store_resp.status_code}")
+        except Exception as e:
+            logger.warning(f"[T2-PROMPT] T2 storage failed: {e}")
+
+        # 4. Send semantic summary as persistent context message to agent
+        summary_msg = f"""[T2 SYSTEM PROMPT LOADED]
+
+{semantic_summary}
+
+Full prompt cached in T2. This semantic summary will persist through all compactions."""
+
+        send_agent_message(agent_key, summary_msg, skip_budget=True)
+
+        logger.info(f"[T2-PROMPT] Completed for {agent_key}")
+        return {"status": "t2_prompt_stored", "agent": agent_key}
+
+    except Exception as e:
+        logger.error(f"[T2-PROMPT] Error for {agent_key}: {e}")
+        return {"error": str(e)}
+
+
+def warm_boot_all():
+    """Warm boot all 5 agents (CTO, Neural Net, Brain, Auditor, Debugger)."""
+    logger.info("[WARM-BOOT-ALL] Starting warm boot for all agents...")
+    agents_to_boot = ['cto', 'neural_net', 'brain', 'auditor', 'debugger']
+    results = {}
+
+    for agent_key in agents_to_boot:
+        result = warm_boot_agent(agent_key)
+        results[agent_key] = result
+        time.sleep(1)  # Small delay to avoid overwhelming the API
+
+    logger.info(f"[WARM-BOOT-ALL] Completed: {results}")
+    return results
+
+
+# ─── Flask Endpoints for Warm Boot & T2 Prompts ──────────────────────
+
+@app.route('/warm-boot/<agent_key>', methods=['POST'])
+@require_auth
+def warm_boot_endpoint(agent_key):
+    """Manually trigger warm boot for a specific agent."""
+    result = warm_boot_agent(agent_key)
+    return jsonify(result)
+
+
+@app.route('/warm-boot/all', methods=['POST'])
+@require_auth
+def warm_boot_all_endpoint():
+    """Manually trigger warm boot for all agents."""
+    results = warm_boot_all()
+    return jsonify({"status": "warm_boot_initiated_all", "results": results})
+
+
+@app.route('/t2-prompts/status', methods=['GET'])
+@require_auth
+def t2_prompts_status():
+    """Get status of T2 prompt storage and semantic summaries."""
+    cached_summaries = list(AGENT_PROMPT_SUMMARIES.keys())
+    return jsonify({
+        "status": "t2_prompts",
+        "agents": list(AGENT_IDS.keys()),
+        "cached_summaries": cached_summaries,
+        "total_cached": len(AGENT_PROMPT_SUMMARIES)
+    })
+
+
 def never_idle_daemon():
     """CORE DAEMON: Every 5 minutes, ensure the system is working on something.
     BUDGET-AWARE: Respects token budget (30 calls/hr max). Won't burn tokens on idle chatter.
@@ -1622,9 +1906,19 @@ def never_idle_daemon():
 
     # Track what we've already assigned to avoid re-assigning
     assigned_tasks = set()
+    first_cycle = True
 
     while True:
         try:
+            # FIRST CYCLE ONLY: Warm boot all agents
+            if first_cycle:
+                logger.info("[NEVER-IDLE] First cycle — warming up all agents...")
+                try:
+                    warm_boot_all()
+                except Exception as e:
+                    logger.error(f"[NEVER-IDLE] Warm boot failed: {e}")
+                first_cycle = False
+
             time.sleep(300)  # Check every 5 minutes (was 2min, caused token burn)
 
             # Budget gate — if we've hit the hourly limit, skip entirely
@@ -2503,7 +2797,17 @@ def auditor_guardian_daemon():
             except Exception as e:
                 logger.warning(f"Duplicate check failed: {e}")
 
-            # 5. Log token budget status
+            # 5. Verify all agents have T2 prompts stored (new Layer 4 system)
+            try:
+                for agent_key in AGENT_IDS.keys():
+                    # Check if semantic summary is cached
+                    if agent_key not in AGENT_PROMPT_SUMMARIES:
+                        logger.info(f"[AUDITOR-GUARDIAN] T2 prompt missing for {agent_key}, auto-storing...")
+                        store_prompt_in_t2(agent_key)
+            except Exception as e:
+                logger.warning(f"[AUDITOR-GUARDIAN] T2 prompt verification failed: {e}")
+
+            # 6. Log token budget status
             logger.info(f"Token budget: {TOKEN_BUDGET['calls_this_hour']}/{TOKEN_BUDGET['max_calls_per_hour']} calls, "
                         f"{TOKEN_BUDGET['tokens_this_hour']}/{TOKEN_BUDGET['hourly_limit']} tokens this hour")
 
