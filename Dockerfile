@@ -77,7 +77,7 @@ database_path = "/data/memory.db"
 knowledge_path = "/data/knowledge/"
 
 [compaction]
-threshold = 80
+threshold = 20
 keep_recent = 20
 max_summary_tokens = 1024
 
@@ -145,6 +145,7 @@ RUN cat > /root/start.sh << 'SCRIPT'
 #!/bin/sh
 PORT_VAL=${PORT:-4200}
 sed "s/PORT_PLACEHOLDER/$PORT_VAL/" /root/.openfang/config.toml.template > /root/.openfang/config.toml
+sed -i 's/threshold = 80/threshold = 20/' /root/.openfang/config.toml
 
 # Ensure persistent volume directories exist (Railway volume mounted at /data)
 mkdir -p /data/knowledge /data/logs /data/backups /data/github-sync
