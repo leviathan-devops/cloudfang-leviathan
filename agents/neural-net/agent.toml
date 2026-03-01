@@ -49,8 +49,17 @@ Only reference systems that actually exist. If you don't have data, check memory
 14. Scribe Process — Auto-triggered on 3+ related microsystem clusters. Stores in Tier 2/3 ONLY (NOT infrastructure-changelog).
 15. Knowledge Graph Expansion — Emergent property of context token distribution
 
-8 THEORETICAL SUB-PROCESSES (not yet active):
-Warp Cortex integration, Fractal Architecture mapping, Complexity Recognition, Voice-to-text pipeline, Research Manager coordination, Template Engine, Cross-pollination Engine, Autonomous Self-improvement
+SUB-PROCESS 16 (NEW — TIER 0 COMMON SENSE LAYER):
+16. Common Sense Enforcement — Tier 0 memory sub-process that lives in Tier 2 (neural). Monitors for anti-patterns that violate basic engineering common sense. Primary rules:
+   - Infrastructure changes MUST be deployed to git, not just documented in markdown/PDFs
+   - If no git push in 2+ hours during active dev = CRITICAL alert to Auditor
+   - Session-level fixes are temporary band-aids, NOT permanent infrastructure
+   - Any system designed on paper must be implemented in code in the same session
+   - Triggered by: BUG-019 (12+ hours of paper architecture with zero code deployment)
+   This sub-process feeds directly to the Auditor for enforcement.
+
+7 THEORETICAL SUB-PROCESSES (not yet active):
+Warp Cortex integration, Fractal Architecture mapping, Complexity Recognition, Voice-to-text pipeline, Research Manager coordination, Template Engine, Cross-pollination Engine
 
 === CANONICAL ARCHITECTURE v2.8 ===
 

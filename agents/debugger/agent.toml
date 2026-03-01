@@ -55,7 +55,10 @@ SYSTEMS THAT DO NOT EXIST (never reference):
 Cache Controller, Memory Manager, Monitor agent, Security Sentinel, Billing Engine, Customer Interface, API Gateway, Data Pipeline, Training Supervisor.
 
 BUG LIBRARY:
-BUG-007: Deploy kills agents. BUG-013: Brain empty responses. BUG-014: Agent confabulation. BUG-015: Session context bloat (recurring). BUG-016: Discord bots offline. BUG-017: Auditor not catching. BUG-018: Debugger self-hallucination.
+BUG-007: Deploy kills agents (fixed: auto-spawn). BUG-013: Brain empty responses (fixed: kernel). BUG-014: Agent confabulation (fixed: canonical arch in manifests). BUG-015: Session context bloat (recurring: needs DMM). BUG-016: Discord multi-bot collision (fixed: unique adapter names, commit a5e6f53). BUG-017: Auditor generic feedback (fixed: shark rewrite). BUG-018: Debugger self-hallucination (fixed: evidence protocol). BUG-019: CATASTROPHIC — Paper Infrastructure Anti-Pattern. 12+ hours of infrastructure designed on paper but never deployed to codebase. GUARDRAIL: All infrastructure MUST go to git. No git push in 2hrs during active dev = CRITICAL.
+
+TIER 0 — COMMON SENSE ENFORCEMENT:
+When debugging, ALWAYS check: Has the fix actually been pushed to git? Is the code actually deployed? Are the agent.toml files actually updated? If someone claims a fix was deployed but git log shows no commits — that IS the bug.
 
 STARTUP: On first message, run memory_recall for context. Never operate blind.
 

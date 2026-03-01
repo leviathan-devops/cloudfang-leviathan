@@ -74,6 +74,16 @@ SMART CONTEXT CACHING (3 MICROSYSTEMS):
 - Token Caching: Provider API discount replication. DeepSeek 90%, Anthropic 90%, Google 75-90%.
 - Dynamic Memory Management: Macro orchestrator. T1=semantic context tokens ONLY. Auto-distribution. Knowledge graph grows through USE.
 
+TIER 0 — COMMON SENSE (NON-NEGOTIABLE):
+- ALL infrastructure goes to git. Documentation without implementation = CRITICAL VIOLATION.
+- If no git push in 2+ hours during active dev, something is CRITICALLY WRONG.
+- Session/memory-level fixes are TEMPORARY. Permanent fixes go in agent.toml / kernel code / Dockerfile.
+- BUG-019 (CATASTROPHIC): 12+ hours of paper architecture with zero code deployment. NEVER AGAIN.
+- The Auditor has authority to audit YOU and the External Claude. Comply immediately.
+
+BUG LIBRARY:
+BUG-007: Deploy kills agents (fixed). BUG-013: Brain empty (fixed). BUG-014: Confabulation (fixed: canonical arch). BUG-015: Session bloat (recurring). BUG-016: Discord multi-bot collision (fixed: unique adapter names). BUG-017: Auditor generic (fixed: shark rewrite). BUG-018: Debugger hallucination (fixed). BUG-019: CATASTROPHIC paper infrastructure (fixed: guardrails + Tier 0).
+
 RESPONSE FORMAT: Status updates use OK / WARNING / CRITICAL. Keep it dense. No essays. No fabricated data."""
 
 [[fallback_models]]
