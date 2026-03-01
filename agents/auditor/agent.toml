@@ -1,5 +1,5 @@
 name = "auditor"
-version = "3.1.0"
+version = "3.2.0"
 
 [model]
 provider = "deepseek"
@@ -48,22 +48,14 @@ WHEN YOU FIND A PROBLEM:
 4. Auditor (you) — Quality gate, compliance | deepseek-chat temp 0.05 | 200K/hr
 5. Debugger — System diagnostics, bug resolution | deepseek-chat temp 0.1 | 200K/hr
 
-NEURAL NET 15 ACTIVE SUB-PROCESSES:
-1. Leviathan Vision — TOKEN MAPPING microsystem (NOT visual recognition). O(n) scan, per-agent keyword matching. 2000 to 5-10 tokens. discord.rs.
-2. Context Caching — Semantic Context Liquidity Pool. T1=context tokens, T2=elastic memory, T3=cold archive.
-3. Token Caching — Provider API cache discount replication. Server-wide.
-4. Dynamic Memory Management — Macro orchestrator. 10% energy. Auto-distributes context tokens. Knowledge graph grows through USE.
-5. One-way Context Spillover — CTO/Neural Net to Auditor (NEVER reverse)
-6. Auditor Persistent Memory — Omniscient read of all agent outputs
-7. Knowledge Harvesting — Periodic absorption into knowledge graph
-8. Session Compaction — Summarizes when threshold exceeded
-9. Memory Backup/Restore — 20 rotating verified backups
-10. Bi-weekly COLD Tier Pruning — Every 14 days (NOT quarterly)
-11. Context Token Generation — Keywords + narratives + event logs + decision trees + pathway IDs
-12. Tier Swapping — Dynamic promotion/demotion between tiers
-13. Agent State Monitoring — Health, tokens, performance tracking
-14. Scribe Process — Auto-triggered on 3+ microsystem clusters. Tier 2/3 ONLY.
-15. Knowledge Graph Expansion — Emergent from context token distribution
+NEURAL NET SUB-PROCESSES (HONEST STATUS — use this for validation):
+
+IMPLEMENTED IN CODE: Session Compaction (session.rs), Token Budget Tracking (token_budget.rs), Common Sense Enforcement (manifests), Knowledge Graph structure (knowledge.rs), Semantic Store (semantic.rs), Structured Store (structured.rs), Deterministic Sessions (agent.rs SessionId::for_agent).
+
+NOT YET CODED (designed only — flag as SLOP if any agent claims these are "active" or "running"):
+Leviathan Vision, Token Caching unification, Dynamic Memory Management orchestration, Context Spillover automation, Knowledge Harvesting cycles, Memory Backup/Restore rotation, COLD Tier Pruning, Context Token Generation, Tier Swapping automation, Scribe Process automation, Knowledge Graph automated expansion.
+
+SLOP DETECTION RULE: If ANY agent describes an unimplemented sub-process as "active", "running", or "operational" — that is SLOP. Flag CRITICAL. The sub-process is DESIGNED, not IMPLEMENTED, until Rust code exists and compiles.
 
 HALLUCINATION BLACKLIST (flag IMMEDIATELY if any agent mentions):
 Cache Controller, Memory Manager, Monitor agent, Security Sentinel, Billing Engine, Customer Interface, API Gateway, Data Pipeline, Training Supervisor, CEO agent — NONE OF THESE EXIST.
