@@ -20,6 +20,7 @@ pub mod pairing;
 pub mod registry;
 pub mod scheduler;
 pub mod supervisor;
+pub mod token_budget;
 pub mod triggers;
 pub mod whatsapp_gateway;
 pub mod wizard;

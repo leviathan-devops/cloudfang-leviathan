@@ -122,6 +122,34 @@ impl UsageStore {
         Ok(cost)
     }
 
+    /// Query total tokens (input + output) in the last hour for an agent.
+    /// Returns a UsageSummary with token counts populated.
+    pub fn query_hourly_tokens(&self, agent_id: AgentId) -> OpenFangResult<UsageSummary> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let summary = conn
+            .query_row(
+                "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                        COALESCE(SUM(cost_usd), 0.0), COUNT(*), COALESCE(SUM(tool_calls), 0)
+                 FROM usage_events
+                 WHERE agent_id = ?1 AND timestamp > datetime('now', '-1 hour')",
+                rusqlite::params![agent_id.0.to_string()],
+                |row| {
+                    Ok(UsageSummary {
+                        total_input_tokens: row.get::<_, i64>(0)? as u64,
+                        total_output_tokens: row.get::<_, i64>(1)? as u64,
+                        total_cost_usd: row.get(2)?,
+                        call_count: row.get::<_, i64>(3)? as u64,
+                        total_tool_calls: row.get::<_, i64>(4)? as u64,
+                    })
+                },
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        Ok(summary)
+    }
+
     /// Query total cost today for an agent.
     pub fn query_daily(&self, agent_id: AgentId) -> OpenFangResult<f64> {
         let conn = self

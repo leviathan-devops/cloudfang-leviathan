@@ -7,6 +7,7 @@ use crate::config::load_config;
 use crate::error::{KernelError, KernelResult};
 use crate::event_bus::EventBus;
 use crate::metering::MeteringEngine;
+use crate::token_budget::TokenBudgetTracker;
 use crate::registry::AgentRegistry;
 use crate::scheduler::AgentScheduler;
 use crate::supervisor::Supervisor;
@@ -82,6 +83,8 @@ pub struct OpenFangKernel {
     pub audit_log: Arc<AuditLog>,
     /// Cost metering engine.
     pub metering: Arc<MeteringEngine>,
+    /// Token budget tracker (proactive rate limit detection).
+    pub token_budget: Arc<TokenBudgetTracker>,
     /// Default LLM driver (from kernel config).
     default_driver: Arc<dyn LlmDriver>,
     /// WASM sandbox engine (shared across all WASM agent executions).
@@ -595,9 +598,11 @@ impl OpenFangKernel {
         };
 
         // Initialize metering engine (shares the same SQLite connection as the memory substrate)
-        let metering = Arc::new(MeteringEngine::new(Arc::new(
-            openfang_memory::usage::UsageStore::new(memory.usage_conn()),
-        )));
+        let usage_store = Arc::new(openfang_memory::usage::UsageStore::new(memory.usage_conn()));
+        let metering = Arc::new(MeteringEngine::new(usage_store.clone()));
+
+        // Initialize token budget tracker (for proactive rate limit detection)
+        let token_budget = Arc::new(TokenBudgetTracker::new(usage_store));
 
         let supervisor = Supervisor::new();
         let background = BackgroundExecutor::new(supervisor.subscribe());
@@ -864,6 +869,7 @@ impl OpenFangKernel {
             background,
             audit_log: Arc::new(AuditLog::new()),
             metering,
+            token_budget,
             default_driver: driver,
             wasm_sandbox,
             auth,
@@ -1920,6 +1926,12 @@ impl OpenFangKernel {
             .check_quota(agent_id, &entry.manifest.resources)
             .map_err(KernelError::OpenFang)?;
 
+        // Check token budget and apply proactive rate limit detection
+        let budget_result = self
+            .token_budget
+            .check_budget(agent_id, &entry.manifest.resources)
+            .map_err(KernelError::OpenFang)?;
+
         let mut session = self
             .memory
             .get_session(entry.session_id)
@@ -2044,6 +2056,69 @@ impl OpenFangKernel {
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
+        }
+
+        // Handle token budget check results
+        use crate::token_budget::BudgetStatus;
+        match &budget_result.status {
+            BudgetStatus::Exhausted { tokens_used, max_tokens } => {
+                // Token budget is exhausted — block the request
+                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(
+                    format!(
+                        "Agent {} has exhausted hourly token budget: {} / {} tokens used",
+                        agent_id, tokens_used, max_tokens
+                    )
+                )));
+            }
+            BudgetStatus::Critical { tokens_used, max_tokens, percent } => {
+                // At 95%+: attempt to switch to fallback model
+                if !manifest.fallback_models.is_empty() {
+                    match TokenBudgetTracker::select_fallback_model(&manifest.fallback_models) {
+                        Ok(fallback) => {
+                            warn!(
+                                agent = %manifest.name,
+                                tokens_used = tokens_used,
+                                max_tokens = max_tokens,
+                                usage_percent = format!("{:.1}%", percent),
+                                fallback_provider = %fallback.provider,
+                                fallback_model = %fallback.model,
+                                "Switching to fallback model due to token budget criticality"
+                            );
+                            manifest.model.provider = fallback.provider.clone();
+                            manifest.model.model = fallback.model.clone();
+                            if let Some(api_key_env) = fallback.api_key_env {
+                                manifest.model.api_key_env = Some(api_key_env);
+                            }
+                            if let Some(base_url) = fallback.base_url {
+                                manifest.model.base_url = Some(base_url);
+                            }
+                        }
+                        Err(e) => {
+                            return Err(KernelError::OpenFang(e));
+                        }
+                    }
+                } else {
+                    warn!(
+                        agent = %manifest.name,
+                        tokens_used = tokens_used,
+                        max_tokens = max_tokens,
+                        usage_percent = format!("{:.1}%", percent),
+                        "Token budget critical but no fallback models configured"
+                    );
+                }
+            }
+            BudgetStatus::Warning { tokens_used, max_tokens, percent } => {
+                warn!(
+                    agent = %manifest.name,
+                    tokens_used = tokens_used,
+                    max_tokens = max_tokens,
+                    usage_percent = format!("{:.1}%", percent),
+                    "Agent approaching token budget limit"
+                );
+            }
+            BudgetStatus::Healthy { .. } | BudgetStatus::Unlimited => {
+                // All good, continue normally
+            }
         }
 
         let is_stable = self.config.mode == openfang_types::config::KernelMode::Stable;

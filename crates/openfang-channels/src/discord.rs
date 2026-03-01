@@ -513,9 +513,14 @@ async fn parse_discord_message(
         } else {
             vec![]
         };
+        // For commands, include reply context as the first argument if present
+        let mut command_args = args;
+        if !reply_context.is_empty() {
+            command_args.insert(0, reply_context.trim_end().to_string());
+        }
         ChannelContent::Command {
             name: cmd_name.to_string(),
-            args,
+            args: command_args,
         }
     } else {
         ChannelContent::Text(full_text)
@@ -715,6 +720,148 @@ mod tests {
         assert!(
             matches!(msg.content, ChannelContent::Text(ref t) if t == "Edited message content")
         );
+    }
+
+    #[tokio::test]
+    async fn test_parse_discord_message_with_reply() {
+        let bot_id = Arc::new(RwLock::new(Some("bot123".to_string())));
+        let d = serde_json::json!({
+            "id": "msg2",
+            "channel_id": "ch1",
+            "content": "I agree with that!",
+            "author": {
+                "id": "user456",
+                "username": "bob",
+                "discriminator": "0",
+                "bot": false
+            },
+            "timestamp": "2024-01-01T00:00:01+00:00",
+            "referenced_message": {
+                "id": "msg1",
+                "content": "This is a great idea",
+                "author": {
+                    "id": "user123",
+                    "username": "alice",
+                    "discriminator": "0"
+                }
+            }
+        });
+
+        let msg = parse_discord_message(&d, &bot_id, &[]).await.unwrap();
+        assert_eq!(msg.sender.display_name, "bob");
+
+        // Verify reply context is included in the message
+        match &msg.content {
+            ChannelContent::Text(text) => {
+                assert!(text.contains("[Replying to alice:"));
+                assert!(text.contains("This is a great idea"));
+                assert!(text.contains("I agree with that!"));
+            }
+            other => panic!("Expected Text content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_discord_message_reply_with_command() {
+        let bot_id = Arc::new(RwLock::new(Some("bot123".to_string())));
+        let d = serde_json::json!({
+            "id": "msg3",
+            "channel_id": "ch1",
+            "content": "/agent summarize",
+            "author": {
+                "id": "user789",
+                "username": "charlie",
+                "discriminator": "0",
+                "bot": false
+            },
+            "timestamp": "2024-01-01T00:00:02+00:00",
+            "referenced_message": {
+                "id": "msg1",
+                "content": "Long discussion about something",
+                "author": {
+                    "id": "user123",
+                    "username": "alice",
+                    "discriminator": "0"
+                }
+            }
+        });
+
+        let msg = parse_discord_message(&d, &bot_id, &[]).await.unwrap();
+
+        // Verify command is parsed and reply context is included as first argument
+        match &msg.content {
+            ChannelContent::Command { name, args } => {
+                assert_eq!(name, "agent");
+                assert_eq!(args.len(), 2);
+                // First arg should be the reply context
+                assert!(args[0].contains("[Replying to alice:"));
+                assert_eq!(args[1], "summarize");
+            }
+            other => panic!("Expected Command content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_discord_message_reply_empty_referenced() {
+        let bot_id = Arc::new(RwLock::new(Some("bot123".to_string())));
+        let d = serde_json::json!({
+            "id": "msg2",
+            "channel_id": "ch1",
+            "content": "Reply with empty ref",
+            "author": {
+                "id": "user456",
+                "username": "bob",
+                "discriminator": "0",
+                "bot": false
+            },
+            "timestamp": "2024-01-01T00:00:01+00:00",
+            "referenced_message": {
+                "id": "msg1",
+                "content": "",
+                "author": {
+                    "id": "user123",
+                    "username": "alice",
+                    "discriminator": "0"
+                }
+            }
+        });
+
+        let msg = parse_discord_message(&d, &bot_id, &[]).await.unwrap();
+
+        // If referenced message has no content, should just be the reply text
+        match &msg.content {
+            ChannelContent::Text(text) => {
+                assert_eq!(text, "Reply with empty ref");
+            }
+            other => panic!("Expected Text content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_discord_message_reply_no_referenced() {
+        let bot_id = Arc::new(RwLock::new(Some("bot123".to_string())));
+        let d = serde_json::json!({
+            "id": "msg2",
+            "channel_id": "ch1",
+            "content": "Regular message",
+            "author": {
+                "id": "user456",
+                "username": "bob",
+                "discriminator": "0",
+                "bot": false
+            },
+            "timestamp": "2024-01-01T00:00:01+00:00"
+        });
+
+        let msg = parse_discord_message(&d, &bot_id, &[]).await.unwrap();
+
+        // Without referenced_message field, should be just the text
+        match &msg.content {
+            ChannelContent::Text(text) => {
+                assert_eq!(text, "Regular message");
+            }
+            other => panic!("Expected Text content, got {other:?}"),
+        }
     }
 
     #[test]
