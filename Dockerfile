@@ -1,16 +1,21 @@
-# Leviathan DevOps — OpenFang v0.2.3
-# Phase 4: Triple-agent architecture — CTO + Neural Net + Prompt Architect
+# Leviathan DevOps — OpenFang v0.2.3 + Python Discord Bridge
+# Phase 4: Triple-agent architecture — CTO + Neural Net + Brain
 # CTO = conscious reasoning, full autonomy, primary interface
 # Neural Net = subconscious, server-hardwired background process, executive layer
-# Prompt Architect = DeepSeek R1 reasoning engine, meta-prompting refinement
+# Brain = DeepSeek R1 reasoning engine, deep analysis
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 python3 nodejs npm && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl libssl3 libsqlite3-0 python3 python3-pip nodejs npm && rm -rf /var/lib/apt/lists/*
 
 # Install agent-browser for web link absorption + knowledge harvesting
 RUN npm install -g agent-browser && agent-browser install --with-deps 2>/dev/null || true
 
-# Download OpenFang v0.2.3 release binary (2026-03-01) — includes extra_discord multi-bot support
+# Install Python Discord gateway library for Cloud/Brain bot bridge
+RUN pip3 install --break-system-packages discord.py aiohttp
+
+# Download OpenFang v0.2.3 release binary (2026-03-01)
+# NOTE: upstream binary does NOT include our extra_discord code.
+# Cloud/Brain bots are bridged via Python discord_bridge.py instead.
 RUN curl -fsSL \
   "https://github.com/RightNow-AI/openfang/releases/download/v0.2.3/openfang-x86_64-unknown-linux-gnu.tar.gz" \
   -o /tmp/openfang.tar.gz \
@@ -21,12 +26,15 @@ RUN curl -fsSL \
 # Initialize OpenFang directory structure
 RUN openfang init --quick
 
-# Copy agent manifests — CTO (primary) + Neural Net (executive) + Prompt Architect (meta-prompting) + Auditor + Debugger
+# Copy agent manifests — CTO (primary) + Neural Net + Brain + Auditor + Debugger
 COPY agents/leviathan/agent.toml /root/.openfang/agents/leviathan/agent.toml
 COPY agents/neural-net/agent.toml /root/.openfang/agents/neural-net/agent.toml
 COPY agents/prompt-architect/agent.toml /root/.openfang/agents/prompt-architect/agent.toml
 COPY agents/auditor/agent.toml /root/.openfang/agents/auditor/agent.toml
 COPY agents/debugger/agent.toml /root/.openfang/agents/debugger/agent.toml
+
+# Copy Discord bridge for Cloud/Brain bots (upstream binary lacks extra_discord support)
+COPY discord_bridge.py /root/discord_bridge.py
 
 # Full Leviathan config — DeepSeek V3 primary, OpenRouter + Groq fallbacks
 # Port injected at runtime from Railway's $PORT env var
@@ -218,6 +226,16 @@ spawn_agent "Auditor" "/root/.openfang/agents/auditor/agent.toml"
 spawn_agent "Debugger" "/root/.openfang/agents/debugger/agent.toml"
 
 echo "All 5 primary agents spawn attempted (CTO + Neural Net + Brain + Auditor + Debugger)"
+
+# ─── DISCORD BRIDGE: Cloud & Brain bots ───
+# Upstream OpenFang binary only supports one Discord bot (CTO).
+# This Python bridge connects Cloud and Brain bots via separate gateway connections
+# and routes messages to the kernel API.
+export OPENFANG_API_URL="http://localhost:$PORT_VAL"
+export OPENFANG_API_KEY="leviathan-test-key-2026"
+python3 /root/discord_bridge.py &
+BRIDGE_PID=$!
+echo "Discord bridge started (PID: $BRIDGE_PID) — Cloud + Brain bots"
 
 # Foreground the main process
 wait $OPENFANG_PID
