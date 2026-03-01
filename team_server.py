@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Leviathan Super Brain Dev Team v4.0
+Leviathan Super Brain Dev Team v4.2
 ===================================
 Gemma 3 (free) = chat interface bridge — all user-facing I/O.
 Heavy models = task execution only, never wasted on chat.
+Discord bot + Web UI dual interface.
 
 Architecture:
   User ↔ Gemma 3 (free bridge)
@@ -17,8 +18,10 @@ import json
 import time
 import re
 import logging
+import asyncio
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import requests
 from flask import Flask, render_template_string, request, jsonify
 
@@ -452,8 +455,127 @@ def index():
     return HTML
 
 
+# ─── Discord Bot ─────────────────────────────────────────────
+
+DISCORD_TOKEN = os.environ.get('DISCORD_BOT_TOKEN_DEVTEAM', '')
+DISCORD_GUILD_ID = 1477804209842815382
+
+discord_bot = None
+
+def start_discord_bot():
+    """Run Discord bot in background thread alongside Flask."""
+    global discord_bot
+    if not DISCORD_TOKEN:
+        logger.warning("No DISCORD_BOT_TOKEN_DEVTEAM set, skipping Discord bot")
+        return
+
+    try:
+        import discord
+    except ImportError:
+        logger.error("discord.py not installed, skipping Discord bot")
+        return
+
+    intents = discord.Intents.default()
+    intents.message_content = True
+    bot = discord.Client(intents=intents)
+    discord_bot = bot
+
+    @bot.event
+    async def on_ready():
+        logger.info(f"Discord bot connected as {bot.user} (ID: {bot.user.id})")
+        guild = bot.get_guild(DISCORD_GUILD_ID)
+        if guild:
+            logger.info(f"Connected to guild: {guild.name}")
+        else:
+            logger.warning(f"Guild {DISCORD_GUILD_ID} not found — bot may not be invited yet")
+
+    @bot.event
+    async def on_message(message):
+        # Ignore own messages
+        if message.author == bot.user:
+            return
+
+        # Respond to DMs, @mentions, or messages in any channel the bot can see
+        is_dm = message.guild is None
+        is_mention = bot.user in message.mentions if message.guild else False
+
+        # In guild channels: only respond to @mentions or if message starts with !team
+        if message.guild and not is_mention and not message.content.startswith('!team'):
+            return
+
+        # Strip the mention/command prefix
+        content = message.content
+        if is_mention:
+            content = content.replace(f'<@{bot.user.id}>', '').replace(f'<@!{bot.user.id}>', '').strip()
+        elif content.startswith('!team'):
+            content = content[5:].strip()
+
+        if not content:
+            await message.reply("What do you need? Send me a message and the dev team will handle it.")
+            return
+
+        # Show typing while processing
+        async with message.channel.typing():
+            # Run pipeline in thread pool (it uses blocking requests)
+            loop = asyncio.get_event_loop()
+            try:
+                result = await loop.run_in_executor(None, run_pipeline, content)
+                response_text = result.get('response', 'No response generated.')
+                models = result.get('models_used', [])
+                proc_time = result.get('processing_time', '?')
+
+                # Build footer
+                footer = f"\n-# {' · '.join(models)} · {proc_time}" if models else ""
+
+                full_response = response_text + footer
+
+                # Discord max is 2000 chars — chunk if needed
+                if len(full_response) <= 2000:
+                    await message.reply(full_response)
+                else:
+                    # Send in chunks, reply first, then follow-up
+                    chunks = []
+                    while full_response:
+                        if len(full_response) <= 2000:
+                            chunks.append(full_response)
+                            break
+                        # Find a good split point
+                        split_at = full_response.rfind('\n', 0, 1990)
+                        if split_at < 500:
+                            split_at = 1990
+                        chunks.append(full_response[:split_at])
+                        full_response = full_response[split_at:].lstrip()
+
+                    for i, chunk in enumerate(chunks):
+                        if i == 0:
+                            await message.reply(chunk)
+                        else:
+                            await message.channel.send(chunk)
+
+            except Exception as e:
+                logger.error(f"Discord pipeline error: {e}", exc_info=True)
+                await message.reply(f"Error processing your request: {str(e)[:200]}")
+
+    def _run_bot():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(bot.start(DISCORD_TOKEN))
+        except Exception as e:
+            logger.error(f"Discord bot crashed: {e}", exc_info=True)
+
+    thread = threading.Thread(target=_run_bot, daemon=True, name="discord-bot")
+    thread.start()
+    logger.info("Discord bot thread started")
+
+
+# Auto-start Discord bot when module loads (works with gunicorn)
+start_discord_bot()
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    logger.info(f"Super Brain Dev Team v4.0 starting on :{port}")
+    logger.info(f"Super Brain Dev Team v4.2 starting on :{port}")
     logger.info(f"Models: Gemma (bridge) + Grok + Codex + Opus + DeepSeek")
+    logger.info(f"Discord: {'enabled' if DISCORD_TOKEN else 'disabled (no token)'}")
     app.run(host='0.0.0.0', port=port)

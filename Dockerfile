@@ -3,7 +3,7 @@
 # Claude (Architect) + DeepSeek (Engineer) + Grok (Reviewer) + Gemini (Researcher) + DeepSeek-R1 (QA)
 FROM python:3.11-slim
 
-RUN pip install --no-cache-dir flask gunicorn requests
+RUN pip install --no-cache-dir flask gunicorn requests "discord.py>=2.3"
 
 WORKDIR /app
 COPY team_server.py /app/team_server.py
