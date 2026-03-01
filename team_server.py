@@ -52,25 +52,10 @@ class AgentConfig:
 
     ARCHITECT = {
         'name': 'Architect',
-        'model': 'claude-sonnet-4-5-20250929',
+        'model': 'claude-haiku-4-5-20251001',
         'provider': 'anthropic',
-        'system_prompt': """You are the Chief Architect of the Leviathan Cloud OS development team. Your role is to:
-- Design system architecture and high-level technical solutions
-- Make strategic decisions about technology choices and system design patterns
-- Identify architectural risks and scalability concerns
-- Propose modular, maintainable system structures
-- Consider cross-cutting concerns like security, performance, and fault tolerance
-
-When responding:
-1. Provide a clear architectural vision
-2. Explain key design decisions
-3. Identify dependencies and integration points
-4. Suggest implementation order
-5. Flag architectural concerns
-
-For Leviathan Cloud OS context: We're building a cloud operating system with distributed computing,
-containerization, and microservices architecture. Think at the system level, not implementation details.""",
-        'token_limit': 1500,
+        'system_prompt': """You are the Architect on the Leviathan Cloud OS dev team. Design systems, make architecture decisions. Be concise — diagrams and bullet points, not essays.""",
+        'token_limit': 1000,
     }
 
     ENGINEER = {
@@ -124,12 +109,12 @@ class APIClient:
                     'content-type': 'application/json',
                 },
                 json={
-                    'model': 'claude-sonnet-4-5-20250929',
+                    'model': 'claude-haiku-4-5-20251001',
                     'max_tokens': max_tokens,
                     'system': system_prompt,
                     'messages': [{'role': 'user', 'content': user_message}],
                 },
-                timeout=60,
+                timeout=20,
             )
             response.raise_for_status()
             data = response.json()
@@ -166,7 +151,7 @@ class APIClient:
                         {'role': 'user', 'content': user_message},
                     ],
                 },
-                timeout=60,
+                timeout=20,
             )
             response.raise_for_status()
             data = response.json()
@@ -203,7 +188,7 @@ class APIClient:
                         {'role': 'user', 'content': user_message},
                     ],
                 },
-                timeout=60,
+                timeout=20,
             )
             response.raise_for_status()
             data = response.json()
@@ -242,7 +227,7 @@ class APIClient:
                         'maxOutputTokens': max_tokens,
                     },
                 },
-                timeout=60,
+                timeout=20,
             )
             response.raise_for_status()
             data = response.json()
@@ -341,20 +326,19 @@ class Orchestrator:
         agents_to_call = self.decide_agents(user_message)
         logger.info(f"Routing to: {agents_to_call}")
 
-        # Step 2: Call agents in parallel (45s global timeout — agents have their own 60s HTTP timeout)
+        # Step 2: Call agents in parallel (25s cap — agents have 20s HTTP timeout)
         futures = {self.executor.submit(self.call_agent, agent, user_message): agent for agent in agents_to_call}
 
         agent_responses = []
         try:
-            for future in as_completed(futures, timeout=65):
+            for future in as_completed(futures, timeout=25):
                 try:
-                    result = future.result(timeout=5)
+                    result = future.result(timeout=2)
                     agent_responses.append(result)
                 except Exception as e:
-                    agent = futures[future]
-                    logger.warning(f"Agent {agent} failed: {e}")
+                    logger.warning(f"Agent result error: {e}")
         except TimeoutError:
-            logger.warning("Global timeout reached, proceeding with collected responses")
+            logger.warning("Global timeout, proceeding with what we have")
 
         # Filter successful responses
         good_responses = [r for r in agent_responses if not r.get('error') and r.get('response')]
@@ -388,7 +372,7 @@ class Orchestrator:
                     "Synthesize these team responses into one coherent answer. Be concise. Keep code blocks intact. Don't add fluff.",
                     combined_input,
                     model='deepseek-chat',
-                    max_tokens=2000,
+                    max_tokens=1500,
                 )
                 if not final_response:
                     # Fallback: just join them
