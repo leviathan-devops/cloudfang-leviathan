@@ -1,15 +1,15 @@
-# Leviathan Enhanced Opus — Super Brain v2.0
-# DeepSeek R1 reasoning + Gemini 1M context + Multi-agent coding + Background daemons
-# Separate Railway instance from CloudFang Leviathan ecosystem
+# Leviathan Super Brain Dev Team v3.0
+# Multi-model AI software engineering team
+# Claude (Architect) + DeepSeek (Engineer) + Grok (Reviewer) + Gemini (Researcher) + DeepSeek-R1 (QA)
 FROM python:3.11-slim
 
-RUN pip install --no-cache-dir aiohttp flask gunicorn requests schedule
+RUN pip install --no-cache-dir flask gunicorn requests
 
 WORKDIR /app
-COPY . /app/
+COPY team_server.py /app/team_server.py
 
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "120", "--workers", "2", "server:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "180", "--workers", "2", "--threads", "4", "team_server:app"]
