@@ -1,924 +1,453 @@
 #!/usr/bin/env python3
 """
-Leviathan Cloud OS - Multi-Model AI Development Team Server
-A unified Flask application that orchestrates 5 specialist AI agents
-across different frontier models to provide comprehensive software engineering support.
+Leviathan Super Brain Dev Team v4.0
+===================================
+Gemma 3 (free) = chat interface bridge — all user-facing I/O.
+Heavy models = task execution only, never wasted on chat.
+
+Architecture:
+  User ↔ Gemma 3 (free bridge)
+  Gemma routes to → Grok 4.1 / Codex 5.3 / Opus 4.6 / DeepSeek
+  Code review: 3 coding models review all code until consensus
+  Gemma presents final output (saves paid tokens)
 """
 
 import os
 import json
 import time
+import re
 import logging
-import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from flask import Flask, render_template_string, request, jsonify
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [BRAIN] %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 
-# API Configuration
+# ─── API Configuration ────────────────────────────────────────
+
 API_KEYS = {
     'anthropic': os.environ.get('ANTHROPIC_API_KEY', ''),
+    'openai': os.environ.get('OPENAI_API_KEY', ''),
     'deepseek': os.environ.get('DEEPSEEK_API_KEY', ''),
     'xai': os.environ.get('XAI_API_KEY', ''),
-    'google': os.environ.get('GOOGLE_API_KEY', ''),
     'openrouter': os.environ.get('OPENROUTER_API_KEY', ''),
 }
 
-# API Endpoints
-API_ENDPOINTS = {
-    'anthropic': 'https://api.anthropic.com/v1/messages',
-    'deepseek': 'https://api.deepseek.com/chat/completions',
-    'xai': 'https://api.x.ai/v1/chat/completions',
-    'google': 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
+# ─── Model Definitions ────────────────────────────────────────
+
+MODELS = {
+    'gemma': {
+        'name': 'Gemma 3 27B',
+        'role': 'Chat Bridge',
+        'provider': 'openrouter',
+        'model': 'google/gemma-3-27b-it',
+        'max_tokens': 2000,
+        'cost': 'free',
+    },
+    'grok': {
+        'name': 'Grok',
+        'role': 'Lead Engineer + Reviewer',
+        'provider': 'xai',
+        'model': 'grok-3',
+        'max_tokens': 2000,
+        'cost': 'paid',
+    },
+    'codex': {
+        'name': 'Codex',
+        'role': 'Lead Engineer + Reviewer',
+        'provider': 'openai',
+        'model': 'gpt-4o',
+        'max_tokens': 2000,
+        'cost': 'paid',
+    },
+    'opus': {
+        'name': 'Opus',
+        'role': 'Architect + Reviewer',
+        'provider': 'anthropic',
+        'model': 'claude-opus-4-6-20251101',
+        'max_tokens': 2000,
+        'cost': 'paid',
+    },
+    'deepseek': {
+        'name': 'DeepSeek',
+        'role': 'Research + Deep Reasoning',
+        'provider': 'deepseek',
+        'model': 'deepseek-chat',
+        'max_tokens': 2000,
+        'cost': 'paid',
+    },
+    'deepseek_r1': {
+        'name': 'DeepSeek R1',
+        'role': 'Deep Reasoning',
+        'provider': 'deepseek',
+        'model': 'deepseek-reasoner',
+        'max_tokens': 2000,
+        'cost': 'paid',
+    },
 }
 
-# Token tracking per request
-token_usage = threading.local()
+# ─── Unified API Client ───────────────────────────────────────
 
+def call_model(model_key, system_prompt, user_message, max_tokens=None):
+    """Call any model. Returns (text, token_info) or (None, error_string)."""
+    cfg = MODELS[model_key]
+    provider = cfg['provider']
+    model = cfg['model']
+    mt = max_tokens or cfg['max_tokens']
 
-class AgentConfig:
-    """Configuration for each specialist agent."""
-
-    ARCHITECT = {
-        'name': 'Architect',
-        'model': 'claude-haiku-4-5-20251001',
-        'provider': 'anthropic',
-        'system_prompt': """You are the Architect on the Leviathan Cloud OS dev team. Design systems, make architecture decisions. Be concise — diagrams and bullet points, not essays.""",
-        'token_limit': 1000,
-    }
-
-    ENGINEER = {
-        'name': 'Lead Engineer',
-        'model': 'deepseek-chat',
-        'provider': 'deepseek',
-        'system_prompt': """You are the Lead Engineer on the Leviathan Cloud OS dev team. Write production code. Be concise — code first, minimal explanation. Focus on implementation, not theory.""",
-        'token_limit': 2000,
-    }
-
-    REVIEWER = {
-        'name': 'Code Reviewer',
-        'model': 'grok-3',
-        'provider': 'xai',
-        'system_prompt': """You are Code Reviewer on the Leviathan Cloud OS dev team. Find bugs, security issues, and suggest fixes. Be specific and concise — quote the problem line, state the fix.""",
-        'token_limit': 1500,
-    }
-
-    RESEARCHER = {
-        'name': 'Researcher',
-        'model': 'gemini-2.0-flash',
-        'provider': 'google',
-        'system_prompt': """You are Researcher on the Leviathan Cloud OS dev team. Provide relevant technical context, compare approaches, cite best practices. Be concise.""",
-        'token_limit': 1500,
-    }
-
-    QA = {
-        'name': 'QA Engineer',
-        'model': 'deepseek-reasoner',
-        'provider': 'deepseek',
-        'system_prompt': """You are QA Engineer on the Leviathan Cloud OS dev team. Identify edge cases, failure modes, and testing strategies. Be concise and specific.""",
-        'token_limit': 1500,
-    }
-
-
-class APIClient:
-    """Unified client for making API calls to different providers."""
-
-    @staticmethod
-    def call_anthropic(system_prompt, user_message, max_tokens=2000):
-        """Call Claude via Anthropic API."""
-        if not API_KEYS['anthropic']:
-            return None, "Anthropic API key not configured"
-
-        try:
-            response = requests.post(
-                API_ENDPOINTS['anthropic'],
-                headers={
-                    'x-api-key': API_KEYS['anthropic'],
-                    'anthropic-version': '2023-06-01',
-                    'content-type': 'application/json',
-                },
-                json={
-                    'model': 'claude-haiku-4-5-20251001',
-                    'max_tokens': max_tokens,
-                    'system': system_prompt,
-                    'messages': [{'role': 'user', 'content': user_message}],
-                },
-                timeout=20,
+    try:
+        if provider == 'openrouter':
+            resp = requests.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                headers={'Authorization': f'Bearer {API_KEYS["openrouter"]}', 'Content-Type': 'application/json'},
+                json={'model': model, 'max_tokens': mt, 'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_message},
+                ]},
+                timeout=25,
             )
-            response.raise_for_status()
-            data = response.json()
-
-            token_info = {
-                'input': data.get('usage', {}).get('input_tokens', 0),
-                'output': data.get('usage', {}).get('output_tokens', 0),
+            resp.raise_for_status()
+            d = resp.json()
+            return d['choices'][0]['message']['content'], {
+                'input': d.get('usage', {}).get('prompt_tokens', 0),
+                'output': d.get('usage', {}).get('completion_tokens', 0),
             }
 
-            text = data['content'][0]['text']
-            return text, token_info
-        except Exception as e:
-            logger.error(f"Anthropic API error: {str(e)}")
-            return None, f"Anthropic error: {str(e)}"
-
-    @staticmethod
-    def call_deepseek(system_prompt, user_message, model='deepseek-chat', max_tokens=2000):
-        """Call DeepSeek via DeepSeek API."""
-        if not API_KEYS['deepseek']:
-            return None, "DeepSeek API key not configured"
-
-        try:
-            response = requests.post(
-                API_ENDPOINTS['deepseek'],
-                headers={
-                    'Authorization': f'Bearer {API_KEYS["deepseek"]}',
-                    'Content-Type': 'application/json',
-                },
-                json={
-                    'model': model,
-                    'max_tokens': max_tokens,
-                    'messages': [
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_message},
-                    ],
-                },
-                timeout=20,
+        elif provider == 'anthropic':
+            resp = requests.post(
+                'https://api.anthropic.com/v1/messages',
+                headers={'x-api-key': API_KEYS['anthropic'], 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+                json={'model': model, 'max_tokens': mt, 'system': system_prompt,
+                      'messages': [{'role': 'user', 'content': user_message}]},
+                timeout=30,
             )
-            response.raise_for_status()
-            data = response.json()
-
-            token_info = {
-                'input': data.get('usage', {}).get('prompt_tokens', 0),
-                'output': data.get('usage', {}).get('completion_tokens', 0),
+            resp.raise_for_status()
+            d = resp.json()
+            return d['content'][0]['text'], {
+                'input': d.get('usage', {}).get('input_tokens', 0),
+                'output': d.get('usage', {}).get('output_tokens', 0),
             }
 
-            text = data['choices'][0]['message']['content']
-            return text, token_info
-        except Exception as e:
-            logger.error(f"DeepSeek API error: {str(e)}")
-            return None, f"DeepSeek error: {str(e)}"
-
-    @staticmethod
-    def call_xai(system_prompt, user_message, max_tokens=2000):
-        """Call Grok via xAI API."""
-        if not API_KEYS['xai']:
-            return None, "xAI API key not configured"
-
-        try:
-            response = requests.post(
-                API_ENDPOINTS['xai'],
-                headers={
-                    'Authorization': f'Bearer {API_KEYS["xai"]}',
-                    'Content-Type': 'application/json',
-                },
-                json={
-                    'model': 'grok-3',
-                    'max_tokens': max_tokens,
-                    'messages': [
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_message},
-                    ],
-                },
-                timeout=20,
+        elif provider == 'openai':
+            resp = requests.post(
+                'https://api.openai.com/v1/chat/completions',
+                headers={'Authorization': f'Bearer {API_KEYS["openai"]}', 'Content-Type': 'application/json'},
+                json={'model': model, 'max_tokens': mt, 'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_message},
+                ]},
+                timeout=25,
             )
-            response.raise_for_status()
-            data = response.json()
-
-            token_info = {
-                'input': data.get('usage', {}).get('prompt_tokens', 0),
-                'output': data.get('usage', {}).get('completion_tokens', 0),
+            resp.raise_for_status()
+            d = resp.json()
+            return d['choices'][0]['message']['content'], {
+                'input': d.get('usage', {}).get('prompt_tokens', 0),
+                'output': d.get('usage', {}).get('completion_tokens', 0),
             }
 
-            text = data['choices'][0]['message']['content']
-            return text, token_info
-        except Exception as e:
-            logger.error(f"xAI API error: {str(e)}")
-            return None, f"xAI error: {str(e)}"
-
-    @staticmethod
-    def call_google(system_prompt, user_message, max_tokens=2000):
-        """Call Gemini via Google AI API."""
-        if not API_KEYS['google']:
-            return None, "Google API key not configured"
-
-        try:
-            response = requests.post(
-                f"{API_ENDPOINTS['google']}?key={API_KEYS['google']}",
-                headers={'Content-Type': 'application/json'},
-                json={
-                    'contents': [
-                        {
-                            'parts': [
-                                {'text': system_prompt},
-                                {'text': user_message},
-                            ]
-                        }
-                    ],
-                    'generationConfig': {
-                        'maxOutputTokens': max_tokens,
-                    },
-                },
-                timeout=20,
+        elif provider == 'xai':
+            resp = requests.post(
+                'https://api.x.ai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {API_KEYS["xai"]}', 'Content-Type': 'application/json'},
+                json={'model': model, 'max_tokens': mt, 'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_message},
+                ]},
+                timeout=25,
             )
-            response.raise_for_status()
-            data = response.json()
-
-            token_info = {
-                'input': 0,
-                'output': 0,
+            resp.raise_for_status()
+            d = resp.json()
+            return d['choices'][0]['message']['content'], {
+                'input': d.get('usage', {}).get('prompt_tokens', 0),
+                'output': d.get('usage', {}).get('completion_tokens', 0),
             }
 
-            if 'candidates' in data and data['candidates']:
-                text = data['candidates'][0]['content']['parts'][0]['text']
-                return text, token_info
-            else:
-                return None, "No valid response from Google API"
-        except Exception as e:
-            logger.error(f"Google API error: {str(e)}")
-            return None, f"Google error: {str(e)}"
+        elif provider == 'deepseek':
+            resp = requests.post(
+                'https://api.deepseek.com/chat/completions',
+                headers={'Authorization': f'Bearer {API_KEYS["deepseek"]}', 'Content-Type': 'application/json'},
+                json={'model': model, 'max_tokens': mt, 'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_message},
+                ]},
+                timeout=25,
+            )
+            resp.raise_for_status()
+            d = resp.json()
+            return d['choices'][0]['message']['content'], {
+                'input': d.get('usage', {}).get('prompt_tokens', 0),
+                'output': d.get('usage', {}).get('completion_tokens', 0),
+            }
+
+    except Exception as e:
+        logger.error(f"[{model_key}] API error: {e}")
+        return None, str(e)
 
 
-class Orchestrator:
-    """Fast orchestrator — keyword routing, no LLM overhead."""
+# ─── Core Pipeline ─────────────────────────────────────────────
 
-    # Keyword patterns for instant routing (no LLM call needed)
-    ROUTE_PATTERNS = {
-        'architect': ['architect', 'design', 'structure', 'system', 'scale', 'infra', 'deploy', 'microservice', 'pattern', 'diagram', 'plan', 'stack'],
-        'engineer': ['code', 'implement', 'build', 'write', 'function', 'class', 'api', 'endpoint', 'script', 'fix', 'create', 'make', 'add', 'bot', 'server', 'client', 'database', 'docker', 'python', 'rust', 'javascript', 'typescript'],
-        'reviewer': ['review', 'bug', 'issue', 'security', 'vulnerability', 'optimize', 'refactor', 'improve', 'audit', 'check'],
-        'researcher': ['research', 'compare', 'alternative', 'best practice', 'library', 'framework', 'benchmark', 'documentation', 'explain', 'what is', 'how does'],
-        'qa': ['test', 'edge case', 'failure', 'stress', 'reliability', 'monitor', 'alert', 'coverage', 'regression'],
+executor = ThreadPoolExecutor(max_workers=5)
+
+# Task classification keywords (instant, no LLM call)
+CODE_KEYWORDS = ['code', 'implement', 'build', 'write', 'function', 'class', 'api', 'endpoint', 'script', 'fix',
+                 'create', 'make', 'bot', 'server', 'handler', 'module', 'component', 'refactor', 'deploy',
+                 'docker', 'python', 'rust', 'javascript', 'typescript', 'go', 'sql']
+ARCH_KEYWORDS = ['design', 'architect', 'structure', 'system', 'scale', 'infra', 'pattern', 'plan', 'stack',
+                 'microservice', 'pipeline', 'diagram']
+RESEARCH_KEYWORDS = ['research', 'compare', 'explain', 'what is', 'how does', 'best practice', 'alternative',
+                     'library', 'framework', 'benchmark', 'why', 'difference', 'tradeoff']
+REVIEW_KEYWORDS = ['review', 'audit', 'check', 'bug', 'security', 'vulnerability', 'test', 'edge case']
+
+
+def classify_task(msg):
+    """Instant classification. Returns task type and which heavy models to invoke."""
+    m = msg.lower()
+    token_estimate = len(msg.split())
+
+    # Large input (>500 words) → Grok ingests first
+    if token_estimate > 500:
+        return 'large_input', ['grok']
+
+    has_code = any(kw in m for kw in CODE_KEYWORDS)
+    has_arch = any(kw in m for kw in ARCH_KEYWORDS)
+    has_research = any(kw in m for kw in RESEARCH_KEYWORDS)
+    has_review = any(kw in m for kw in REVIEW_KEYWORDS)
+
+    # Pure chat / simple question → Gemma only (free)
+    if not has_code and not has_arch and not has_research and not has_review:
+        return 'chat', []
+
+    # Research → DeepSeek only
+    if has_research and not has_code and not has_arch:
+        return 'research', ['deepseek']
+
+    # Code review → all 3 reviewers
+    if has_review:
+        return 'review', ['grok', 'codex', 'opus']
+
+    # Architecture → Opus + DeepSeek
+    if has_arch and not has_code:
+        return 'architecture', ['opus', 'deepseek']
+
+    # Code task → Grok + Codex (engineers), Opus reviews
+    if has_code:
+        return 'code', ['grok', 'codex']
+
+    # Default: Grok + DeepSeek
+    return 'general', ['grok', 'deepseek']
+
+
+SYSTEM_PROMPTS = {
+    'grok': "You are a lead engineer. Write clean, production code. Be concise — code first, minimal explanation.",
+    'codex': "You are a lead engineer. Write clean, production code. Be concise — code first, minimal explanation.",
+    'opus': "You are the system architect. Design robust solutions. When reviewing code, be specific about bugs and fixes.",
+    'deepseek': "You are a senior researcher and deep reasoning engine. Provide thorough technical analysis. Be concise.",
+}
+
+
+def run_pipeline(user_message):
+    """Main pipeline: classify → execute → review → present."""
+    start = time.time()
+    task_type, models_needed = classify_task(user_message)
+
+    result = {
+        'task_type': task_type,
+        'models_used': [],
+        'tokens': {'input': 0, 'output': 0},
     }
 
-    def __init__(self):
-        self.executor = ThreadPoolExecutor(max_workers=5)
+    # ─── CHAT ONLY: Gemma handles it, zero paid tokens ───
+    if task_type == 'chat':
+        text, tokens = call_model('gemma',
+            "You are the Leviathan Cloud OS development team interface. Answer the user's question directly and concisely. You are friendly but efficient.",
+            user_message, max_tokens=1000)
+        result['response'] = text or "I'm here. What do you need?"
+        result['models_used'] = ['Gemma 3']
+        if isinstance(tokens, dict):
+            result['tokens'] = tokens
+        result['processing_time'] = f"{time.time() - start:.2f}s"
+        return result
 
-    def decide_agents(self, user_message):
-        """Instant keyword-based routing. Zero LLM calls."""
-        msg_lower = user_message.lower()
-        selected = []
+    # ─── LARGE INPUT: Grok ingests, summarizes, distributes ───
+    if task_type == 'large_input':
+        text, tokens = call_model('grok',
+            "You received a large input. Analyze it thoroughly. Provide a structured summary and action plan.",
+            user_message, max_tokens=2000)
+        result['response'] = text or "Failed to process large input."
+        result['models_used'] = ['Grok']
+        if isinstance(tokens, dict):
+            result['tokens'] = tokens
+        result['processing_time'] = f"{time.time() - start:.2f}s"
+        return result
 
-        for agent, keywords in self.ROUTE_PATTERNS.items():
-            if any(kw in msg_lower for kw in keywords):
-                selected.append(agent)
+    # ─── TASK EXECUTION: Call heavy models in parallel ───
+    futures = {}
+    for model_key in models_needed:
+        sp = SYSTEM_PROMPTS.get(model_key, "Provide your expert analysis.")
+        future = executor.submit(call_model, model_key, sp, user_message)
+        futures[future] = model_key
 
-        # Default: engineer + architect for anything not matched
-        if not selected:
-            selected = ['engineer', 'architect']
-
-        # Cap at 3 agents max for speed
-        if len(selected) > 3:
-            # Prioritize: engineer > architect > reviewer > researcher > qa
-            priority = ['engineer', 'architect', 'reviewer', 'researcher', 'qa']
-            selected = [a for a in priority if a in selected][:3]
-
-        return selected
-
-    def call_agent(self, agent_name, user_message):
-        """Call a single agent and return its response."""
-        agent_config = getattr(AgentConfig, agent_name.upper(), None)
-        if not agent_config:
-            return {'agent': agent_name, 'response': None, 'tokens': {'input': 0, 'output': 0}, 'error': True}
-
-        try:
-            provider = agent_config['provider']
-            sp = agent_config['system_prompt']
-            ml = agent_config['token_limit']
-
-            if provider == 'anthropic':
-                text, token_info = APIClient.call_anthropic(sp, user_message, max_tokens=ml)
-            elif provider == 'deepseek':
-                text, token_info = APIClient.call_deepseek(sp, user_message, model=agent_config['model'], max_tokens=ml)
-            elif provider == 'xai':
-                text, token_info = APIClient.call_xai(sp, user_message, max_tokens=ml)
-            elif provider == 'google':
-                text, token_info = APIClient.call_google(sp, user_message, max_tokens=ml)
-            else:
-                return {'agent': agent_name, 'response': None, 'tokens': {'input': 0, 'output': 0}, 'error': True}
-
-            if text is None:
-                return {'agent': agent_name, 'response': str(token_info), 'tokens': {'input': 0, 'output': 0}, 'error': True}
-
-            return {
-                'agent': agent_name,
-                'response': text,
-                'tokens': token_info if isinstance(token_info, dict) else {'input': 0, 'output': 0},
-                'error': False,
-            }
-        except Exception as e:
-            logger.error(f"Agent {agent_name} error: {e}")
-            return {'agent': agent_name, 'response': str(e), 'tokens': {'input': 0, 'output': 0}, 'error': True}
-
-    def process_message(self, user_message):
-        """Process message. 1 or 2 LLM hops max (agents parallel, then optional synthesis)."""
-        start_time = time.time()
-
-        # Step 1: Instant keyword routing (0ms)
-        agents_to_call = self.decide_agents(user_message)
-        logger.info(f"Routing to: {agents_to_call}")
-
-        # Step 2: Call agents in parallel (25s cap — agents have 20s HTTP timeout)
-        futures = {self.executor.submit(self.call_agent, agent, user_message): agent for agent in agents_to_call}
-
-        agent_responses = []
-        try:
-            for future in as_completed(futures, timeout=25):
-                try:
-                    result = future.result(timeout=2)
-                    agent_responses.append(result)
-                except Exception as e:
-                    logger.warning(f"Agent result error: {e}")
-        except TimeoutError:
-            logger.warning("Global timeout, proceeding with what we have")
-
-        # Filter successful responses
-        good_responses = [r for r in agent_responses if not r.get('error') and r.get('response')]
-
-        if not good_responses:
-            return {
-                'response': "All agents failed. Check API keys.",
-                'agents_involved': [],
-                'timestamp': datetime.now().isoformat(),
-                'processing_time': f"{time.time() - start_time:.2f}s",
-                'tokens': {'input': 0, 'output': 0},
-            }
-
-        # Step 3: If only 1 agent responded, return directly (no synthesis LLM call)
-        agents_involved = []
-        for r in good_responses:
-            cfg = getattr(AgentConfig, r['agent'].upper(), {})
-            agents_involved.append(cfg.get('name', r['agent']) if isinstance(cfg, dict) else r['agent'])
-
-        if len(good_responses) == 1:
-            final_response = good_responses[0]['response']
-        else:
-            # Multiple agents: synthesize with DeepSeek (fast, cheap)
-            parts = []
-            for r in good_responses:
-                parts.append(f"[{r['agent'].upper()}]: {r['response']}")
-            combined_input = f"User asked: {user_message}\n\nTeam responses:\n" + "\n\n".join(parts)
-
+    responses = {}
+    try:
+        for future in as_completed(futures, timeout=30):
+            model_key = futures[future]
             try:
-                final_response, _ = APIClient.call_deepseek(
-                    "Synthesize these team responses into one coherent answer. Be concise. Keep code blocks intact. Don't add fluff.",
-                    combined_input,
-                    model='deepseek-chat',
-                    max_tokens=1500,
-                )
-                if not final_response:
-                    # Fallback: just join them
-                    final_response = "\n\n---\n\n".join(r['response'] for r in good_responses)
-            except:
-                final_response = "\n\n---\n\n".join(r['response'] for r in good_responses)
+                text, tokens = future.result(timeout=3)
+                if text:
+                    responses[model_key] = text
+                    result['models_used'].append(MODELS[model_key]['name'])
+                    if isinstance(tokens, dict):
+                        result['tokens']['input'] += tokens.get('input', 0)
+                        result['tokens']['output'] += tokens.get('output', 0)
+            except Exception as e:
+                logger.warning(f"[{model_key}] failed: {e}")
+    except TimeoutError:
+        logger.warning("Parallel execution timeout, using collected responses")
 
-        total_tokens = {
-            'input': sum(r.get('tokens', {}).get('input', 0) for r in agent_responses),
-            'output': sum(r.get('tokens', {}).get('output', 0) for r in agent_responses),
-        }
+    if not responses:
+        result['response'] = "All models timed out. Try a simpler request."
+        result['processing_time'] = f"{time.time() - start:.2f}s"
+        return result
 
-        return {
-            'response': final_response,
-            'agents_involved': agents_involved,
-            'timestamp': datetime.now().isoformat(),
-            'processing_time': f"{time.time() - start_time:.2f}s",
-            'tokens': total_tokens,
-        }
+    # ─── CODE REVIEW PIPELINE (for code tasks with 2+ responses) ───
+    if task_type == 'code' and len(responses) >= 2:
+        # Quick cross-review: each model's code gets checked by the other
+        # Use Gemma to synthesize (free) instead of burning paid tokens
+        combined = "\n\n".join(f"[{MODELS[k]['name']}]:\n{v}" for k, v in responses.items())
+        review_text, _ = call_model('gemma',
+            "You are synthesizing code from multiple engineers into one final implementation. "
+            "Pick the best parts from each, resolve conflicts, present one clean solution. "
+            "Keep all code blocks intact. Be concise.",
+            f"User asked: {user_message}\n\nEngineer outputs:\n{combined}",
+            max_tokens=2000)
+        result['response'] = review_text or combined
+        result['models_used'].append('Gemma 3 (synthesis)')
+    elif len(responses) > 1:
+        # Multiple non-code responses: Gemma synthesizes (free)
+        combined = "\n\n".join(f"[{MODELS[k]['name']}]:\n{v}" for k, v in responses.items())
+        synth_text, _ = call_model('gemma',
+            "Synthesize these expert responses into one coherent answer. Keep it concise and actionable.",
+            f"User asked: {user_message}\n\nTeam responses:\n{combined}",
+            max_tokens=1500)
+        result['response'] = synth_text or combined
+        result['models_used'].append('Gemma 3 (synthesis)')
+    else:
+        # Single response: pass through
+        result['response'] = list(responses.values())[0]
+
+    result['processing_time'] = f"{time.time() - start:.2f}s"
+    return result
 
 
-# Initialize orchestrator
-orchestrator = Orchestrator()
+# ─── Flask Routes ──────────────────────────────────────────────
 
-# HTML Template
-HTML_TEMPLATE = """<!DOCTYPE html>
+@app.route('/api/chat', methods=['POST'])
+def api_chat():
+    try:
+        data = request.json
+        msg = data.get('message', '').strip()
+        if not msg:
+            return jsonify({'error': 'Empty message'}), 400
+        result = run_pipeline(msg)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Chat error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy', 'version': '4.0', 'timestamp': datetime.now().isoformat()})
+
+
+@app.route('/status')
+def status():
+    return jsonify({
+        'version': '4.0',
+        'architecture': 'Gemma bridge + paid model execution',
+        'models': {k: {'name': v['name'], 'role': v['role'], 'cost': v['cost']} for k, v in MODELS.items()},
+        'api_keys': {k: bool(v) for k, v in API_KEYS.items()},
+    })
+
+
+# ─── Chat UI ──────────────────────────────────────────────────
+
+HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Leviathan Cloud OS - AI Dev Team</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #0a0e27;
-            color: #e0e0e0;
-            overflow: hidden;
-        }
-
-        .container {
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-
-        header {
-            background: linear-gradient(135deg, #1a1f3a 0%, #0f1729 100%);
-            border-bottom: 1px solid #2a3550;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
-        }
-
-        h1 {
-            font-size: 24px;
-            font-weight: 600;
-            background: linear-gradient(135deg, #00d4ff, #7c3aed);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .subtitle {
-            font-size: 12px;
-            color: #888;
-            margin-top: 5px;
-        }
-
-        .messages-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .message {
-            display: flex;
-            gap: 12px;
-            animation: slideIn 0.3s ease-out;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .message.user {
-            justify-content: flex-end;
-        }
-
-        .message-content {
-            max-width: 70%;
-            padding: 12px 16px;
-            border-radius: 8px;
-            line-height: 1.5;
-            font-size: 14px;
-            word-wrap: break-word;
-        }
-
-        .user .message-content {
-            background: linear-gradient(135deg, #7c3aed, #5b21b6);
-            color: white;
-        }
-
-        .assistant .message-content {
-            background: #1a2332;
-            border: 1px solid #2a3550;
-        }
-
-        .message-label {
-            font-size: 11px;
-            color: #888;
-            margin-bottom: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .agents-badge {
-            font-size: 10px;
-            color: #00d4ff;
-            margin-top: 8px;
-            padding-top: 8px;
-            border-top: 1px solid #2a3550;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-        }
-
-        .agent-tag {
-            background: rgba(0, 212, 255, 0.1);
-            border: 1px solid rgba(0, 212, 255, 0.3);
-            padding: 2px 6px;
-            border-radius: 3px;
-        }
-
-        .input-container {
-            background: #0f1729;
-            border-top: 1px solid #2a3550;
-            padding: 16px 20px;
-            display: flex;
-            gap: 10px;
-        }
-
-        .input-wrapper {
-            flex: 1;
-            display: flex;
-            gap: 10px;
-        }
-
-        input[type="text"] {
-            flex: 1;
-            background: #1a2332;
-            border: 1px solid #2a3550;
-            color: #e0e0e0;
-            padding: 12px 16px;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: border-color 0.2s;
-        }
-
-        input[type="text"]:focus {
-            outline: none;
-            border-color: #7c3aed;
-            box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.1);
-        }
-
-        button {
-            background: linear-gradient(135deg, #7c3aed, #5b21b6);
-            border: none;
-            color: white;
-            padding: 12px 24px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 500;
-            font-size: 14px;
-            transition: transform 0.2s, opacity 0.2s;
-        }
-
-        button:hover {
-            transform: translateY(-2px);
-            opacity: 0.9;
-        }
-
-        button:active {
-            transform: translateY(0);
-        }
-
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .loading {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-        }
-
-        .loading-dot {
-            width: 6px;
-            height: 6px;
-            background: #00d4ff;
-            border-radius: 50%;
-            animation: pulse 1.4s infinite;
-        }
-
-        .loading-dot:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-
-        .loading-dot:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 0.3;
-            }
-            50% {
-                opacity: 1;
-            }
-        }
-
-        .empty-state {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            gap: 20px;
-            color: #666;
-        }
-
-        .empty-state h2 {
-            font-size: 20px;
-            color: #888;
-        }
-
-        .empty-state p {
-            font-size: 14px;
-            color: #666;
-        }
-
-        .scrollbar {
-            scrollbar-width: thin;
-            scrollbar-color: #2a3550 transparent;
-        }
-
-        .scrollbar::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .scrollbar::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .scrollbar::-webkit-scrollbar-thumb {
-            background: #2a3550;
-            border-radius: 3px;
-        }
-
-        .scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #3a4560;
-        }
-    </style>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leviathan Dev Team</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0e27;color:#e0e0e0;height:100vh;display:flex;flex-direction:column}
+header{background:#111830;border-bottom:1px solid #2a3550;padding:16px 20px}
+h1{font-size:20px;background:linear-gradient(135deg,#00d4ff,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.sub{font-size:11px;color:#666;margin-top:4px}
+#msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:75%;padding:10px 14px;border-radius:8px;font-size:14px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
+.msg.u{align-self:flex-end;background:#5b21b6;color:#fff}
+.msg.a{align-self:flex-start;background:#1a2332;border:1px solid #2a3550}
+.meta{font-size:10px;color:#00d4ff;margin-top:6px;opacity:.7}
+.bar{background:#111830;border-top:1px solid #2a3550;padding:12px 16px;display:flex;gap:8px}
+.bar input{flex:1;background:#1a2332;border:1px solid #2a3550;color:#e0e0e0;padding:10px 14px;border-radius:6px;font-size:14px;outline:none}
+.bar input:focus{border-color:#7c3aed}
+.bar button{background:#7c3aed;border:none;color:#fff;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px}
+.bar button:disabled{opacity:.4}
+.dot{display:inline-block;width:6px;height:6px;background:#00d4ff;border-radius:50%;animation:p 1s infinite}
+.dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+@keyframes p{0%,100%{opacity:.2}50%{opacity:1}}
+</style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>⚡ Leviathan Cloud OS</h1>
-            <div class="subtitle">Multi-Model AI Development Team</div>
-        </header>
-
-        <div class="messages-container scrollbar" id="messagesContainer">
-            <div class="empty-state">
-                <h2>Welcome to the Dev Team</h2>
-                <p>Start a conversation about your Leviathan Cloud OS project</p>
-            </div>
-        </div>
-
-        <div class="input-container">
-            <div class="input-wrapper">
-                <input
-                    type="text"
-                    id="messageInput"
-                    placeholder="Ask your development team anything..."
-                    autocomplete="off"
-                >
-                <button id="sendButton" onclick="sendMessage()">Send</button>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const messagesContainer = document.getElementById('messagesContainer');
-        const messageInput = document.getElementById('messageInput');
-        const sendButton = document.getElementById('sendButton');
-
-        // Load messages from localStorage
-        function loadMessages() {
-            const saved = localStorage.getItem('teamMessages');
-            if (saved) {
-                const messages = JSON.parse(saved);
-                messagesContainer.innerHTML = '';
-                messages.forEach(msg => addMessageToDOM(msg, false));
-                scrollToBottom();
-            }
-        }
-
-        // Save messages to localStorage
-        function saveMessages() {
-            const messages = [];
-            document.querySelectorAll('.message').forEach(el => {
-                const isUser = el.classList.contains('user');
-                const content = el.querySelector('.message-content').textContent;
-                messages.push({ isUser, content });
-            });
-            localStorage.setItem('teamMessages', JSON.stringify(messages));
-        }
-
-        // Add message to DOM
-        function addMessageToDOM(msg, save = true) {
-            if (messagesContainer.querySelector('.empty-state')) {
-                messagesContainer.innerHTML = '';
-            }
-
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${msg.isUser ? 'user' : 'assistant'}`;
-
-            const label = document.createElement('div');
-            label.className = 'message-label';
-            label.textContent = msg.isUser ? 'You' : 'Dev Team';
-
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            contentDiv.textContent = msg.content;
-
-            messageDiv.appendChild(label);
-            messageDiv.appendChild(contentDiv);
-
-            if (msg.agents) {
-                const badge = document.createElement('div');
-                badge.className = 'agents-badge';
-                msg.agents.forEach(agent => {
-                    const tag = document.createElement('div');
-                    tag.className = 'agent-tag';
-                    tag.textContent = agent;
-                    badge.appendChild(tag);
-                });
-                contentDiv.appendChild(badge);
-            }
-
-            messagesContainer.appendChild(messageDiv);
-
-            if (save) {
-                saveMessages();
-            }
-        }
-
-        function scrollToBottom() {
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        }
-
-        async function sendMessage() {
-            const message = messageInput.value.trim();
-            if (!message) return;
-
-            // Add user message
-            addMessageToDOM({ isUser: true, content: message });
-            messageInput.value = '';
-            messageInput.focus();
-            sendButton.disabled = true;
-            scrollToBottom();
-
-            // Add loading indicator
-            const loadingDiv = document.createElement('div');
-            loadingDiv.className = 'message assistant';
-            loadingDiv.innerHTML = `
-                <div class="message-label">Dev Team</div>
-                <div class="message-content">
-                    <div class="loading">
-                        <div class="loading-dot"></div>
-                        <div class="loading-dot"></div>
-                        <div class="loading-dot"></div>
-                    </div>
-                </div>
-            `;
-            messagesContainer.appendChild(loadingDiv);
-            scrollToBottom();
-
-            try {
-                const response = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message }),
-                });
-
-                const data = await response.json();
-                messagesContainer.removeChild(loadingDiv);
-
-                if (data.error) {
-                    addMessageToDOM({
-                        isUser: false,
-                        content: `Error: ${data.error}`,
-                        agents: [],
-                    });
-                } else {
-                    addMessageToDOM({
-                        isUser: false,
-                        content: data.response,
-                        agents: data.agents_involved || [],
-                    });
-                }
-            } catch (error) {
-                messagesContainer.removeChild(loadingDiv);
-                addMessageToDOM({
-                    isUser: false,
-                    content: `Network error: ${error.message}`,
-                    agents: [],
-                });
-            }
-
-            sendButton.disabled = false;
-            scrollToBottom();
-        }
-
-        // Event listeners
-        messageInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
-        });
-
-        // Load messages on page load
-        loadMessages();
-    </script>
+<header>
+<h1>Leviathan Dev Team</h1>
+<div class="sub">Gemma 3 (bridge) · Grok · Codex · Opus · DeepSeek</div>
+</header>
+<div id="msgs"></div>
+<div class="bar">
+<input id="inp" placeholder="Talk to your dev team..." autocomplete="off">
+<button id="btn" onclick="send()">Send</button>
+</div>
+<script>
+const msgs=document.getElementById('msgs'),inp=document.getElementById('inp'),btn=document.getElementById('btn');
+function add(text,isUser,meta){
+  const d=document.createElement('div');d.className='msg '+(isUser?'u':'a');
+  d.textContent=text;
+  if(meta){const m=document.createElement('div');m.className='meta';m.textContent=meta;d.appendChild(m)}
+  msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;
+}
+async function send(){
+  const m=inp.value.trim();if(!m)return;
+  add(m,true);inp.value='';btn.disabled=true;
+  const ld=document.createElement('div');ld.className='msg a';
+  ld.innerHTML='<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+  msgs.appendChild(ld);msgs.scrollTop=msgs.scrollHeight;
+  try{
+    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:m})});
+    const d=await r.json();msgs.removeChild(ld);
+    const meta=d.models_used?.length?d.models_used.join(' · ')+' · '+d.processing_time:'';
+    add(d.response||d.error||'No response',false,meta);
+  }catch(e){msgs.removeChild(ld);add('Error: '+e.message,false)}
+  btn.disabled=false;
+}
+inp.addEventListener('keypress',e=>{if(e.key==='Enter')send()});
+</script>
 </body>
 </html>"""
 
 
 @app.route('/')
 def index():
-    """Serve the main chat UI."""
-    return render_template_string(HTML_TEMPLATE)
-
-
-@app.route('/api/chat', methods=['POST'])
-def api_chat():
-    """API endpoint for chat messages."""
-    try:
-        data = request.json
-        user_message = data.get('message', '').strip()
-
-        if not user_message:
-            return jsonify({'error': 'Empty message'}), 400
-
-        logger.info(f"Chat request: {user_message[:100]}...")
-
-        # Process message through orchestrator
-        result = orchestrator.process_message(user_message)
-
-        return jsonify({
-            'response': result['response'],
-            'agents_involved': result['agents_involved'],
-            'timestamp': result['timestamp'],
-            'processing_time': result['processing_time'],
-            'tokens': result['tokens'],
-        })
-    except Exception as e:
-        logger.error(f"Chat API error: {str(e)}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/health')
-def health():
-    """Health check endpoint."""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-    })
-
-
-@app.route('/status')
-def status():
-    """Status endpoint with configuration info."""
-    api_keys_status = {
-        'anthropic': bool(API_KEYS['anthropic']),
-        'deepseek': bool(API_KEYS['deepseek']),
-        'xai': bool(API_KEYS['xai']),
-        'google': bool(API_KEYS['google']),
-        'openrouter': bool(API_KEYS['openrouter']),
-    }
-
-    return jsonify({
-        'status': 'operational',
-        'timestamp': datetime.now().isoformat(),
-        'api_keys_configured': api_keys_status,
-        'agents': [
-            'architect',
-            'engineer',
-            'reviewer',
-            'researcher',
-            'qa',
-        ],
-        'description': 'Multi-Model AI Development Team for Leviathan Cloud OS',
-    })
-
-
-def main():
-    """Main entry point."""
-    port = int(os.environ.get('PORT', 8080))
-    debug = os.environ.get('DEBUG', 'False').lower() == 'true'
-
-    logger.info("=" * 70)
-    logger.info("Leviathan Cloud OS - Multi-Model AI Development Team")
-    logger.info("=" * 70)
-    logger.info(f"Starting server on port {port}")
-    logger.info(f"Debug mode: {debug}")
-    logger.info("")
-    logger.info("Team Members:")
-    logger.info("  - Architect (Claude via Anthropic)")
-    logger.info("  - Lead Engineer (DeepSeek)")
-    logger.info("  - Code Reviewer (Grok via xAI)")
-    logger.info("  - Researcher (Gemini via Google)")
-    logger.info("  - QA Engineer (DeepSeek Reasoner)")
-    logger.info("")
-    logger.info("Endpoints:")
-    logger.info("  - http://localhost:{}/            (Web UI)".format(port))
-    logger.info("  - http://localhost:{}/api/chat     (Chat API)".format(port))
-    logger.info("  - http://localhost:{}/health       (Health check)".format(port))
-    logger.info("  - http://localhost:{}/status       (Status)".format(port))
-    logger.info("=" * 70)
-
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    return HTML
 
 
 if __name__ == '__main__':
-    main()
+    port = int(os.environ.get('PORT', 8080))
+    logger.info(f"Super Brain Dev Team v4.0 starting on :{port}")
+    logger.info(f"Models: Gemma (bridge) + Grok + Codex + Opus + DeepSeek")
+    app.run(host='0.0.0.0', port=port)
