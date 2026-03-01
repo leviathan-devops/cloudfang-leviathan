@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Leviathan Super Brain Dev Team v4.2
-===================================
-Gemma 3 (free) = chat interface bridge — all user-facing I/O.
-Heavy models = task execution only, never wasted on chat.
+Leviathan Super Brain Dev Team v4.3 — LEAN BUILD
+=================================================
+Credit-efficient: single-model routing by default, multi-model only when critical.
+Gemma 3 (free) = all I/O. Opus = architecture ONLY. Grok = engineering workhorse.
 Discord bot + Web UI dual interface.
 
-Architecture:
-  User ↔ Gemma 3 (free bridge)
-  Gemma routes to → Grok 4.1 / Codex 5.3 / Opus 4.6 / DeepSeek
-  Code review: 3 coding models review all code until consensus
-  Gemma presents final output (saves paid tokens)
+Cost tiers:
+  Chat        → Gemma (FREE)
+  Research    → DeepSeek ($0.27/M in, $1.10/M out — cheapest paid)
+  Code/Debug  → Grok solo ($3/M — workhorse)
+  Review      → Grok + Codex parallel ($3 + $2.50 — no Opus)
+  Architecture→ Opus solo ($15/M — reserved for design decisions only)
+  Synthesis   → Gemma (FREE)
 """
 
 import os
@@ -46,50 +48,42 @@ API_KEYS = {
 MODELS = {
     'gemma': {
         'name': 'Gemma 3 27B',
-        'role': 'Chat Bridge',
+        'role': 'Chat Bridge + Synthesis',
         'provider': 'openrouter',
         'model': 'google/gemma-3-27b-it',
-        'max_tokens': 2000,
+        'max_tokens': 1000,
         'cost': 'free',
     },
     'grok': {
         'name': 'Grok',
-        'role': 'Co-Architect + Lead Engineer + Primary Debugger + Reviewer (2M context)',
+        'role': 'Lead Engineer + Debugger + Reviewer (2M context)',
         'provider': 'xai',
         'model': 'grok-3',
-        'max_tokens': 2000,
+        'max_tokens': 1500,
         'cost': 'paid',
     },
     'codex': {
         'name': 'Codex',
-        'role': 'Lead Engineer + Reviewer',
+        'role': 'Engineer + Reviewer',
         'provider': 'openai',
         'model': 'gpt-4o',
-        'max_tokens': 2000,
+        'max_tokens': 1500,
         'cost': 'paid',
     },
     'opus': {
         'name': 'Opus',
-        'role': 'Architect + Reviewer',
+        'role': 'Architect (design decisions only)',
         'provider': 'anthropic',
         'model': 'claude-opus-4-6-20251101',
-        'max_tokens': 2000,
+        'max_tokens': 1500,
         'cost': 'paid',
     },
     'deepseek': {
         'name': 'DeepSeek',
-        'role': 'Research + Deep Reasoning',
+        'role': 'Research + Reasoning',
         'provider': 'deepseek',
         'model': 'deepseek-chat',
-        'max_tokens': 2000,
-        'cost': 'paid',
-    },
-    'deepseek_r1': {
-        'name': 'DeepSeek R1',
-        'role': 'Deep Reasoning',
-        'provider': 'deepseek',
-        'model': 'deepseek-reasoner',
-        'max_tokens': 2000,
+        'max_tokens': 1500,
         'cost': 'paid',
     },
 }
@@ -209,11 +203,11 @@ DEBUG_KEYWORDS = ['debug', 'error', 'crash', 'trace', 'stacktrace', 'exception',
 
 
 def classify_task(msg):
-    """Instant classification. Returns task type and which heavy models to invoke."""
+    """Instant lean classification. Single-model default, multi only when critical."""
     m = msg.lower()
     token_estimate = len(msg.split())
 
-    # Large input (>500 words) → Grok ingests first
+    # Large input (>500 words) → Grok ingests (2M context)
     if token_estimate > 500:
         return 'large_input', ['grok']
 
@@ -223,39 +217,39 @@ def classify_task(msg):
     has_review = any(kw in m for kw in REVIEW_KEYWORDS)
     has_debug = any(kw in m for kw in DEBUG_KEYWORDS)
 
-    # Pure chat / simple question → Gemma only (free)
+    # Pure chat → Gemma only (FREE)
     if not has_code and not has_arch and not has_research and not has_review and not has_debug:
         return 'chat', []
 
-    # Debug → Grok primary (2M context can scan full codebase)
+    # Architecture → Opus SOLO (the only task Opus touches)
+    if has_arch and not has_code:
+        return 'architecture', ['opus']
+
+    # Code review → Grok + Codex (NO Opus — too expensive for review)
+    if has_review:
+        return 'review', ['grok', 'codex']
+
+    # Debug → Grok SOLO (2M context scans everything)
     if has_debug:
         return 'debug', ['grok']
 
-    # Research → DeepSeek only
-    if has_research and not has_code and not has_arch:
+    # Research → DeepSeek SOLO (cheapest paid model)
+    if has_research and not has_code:
         return 'research', ['deepseek']
 
-    # Code review → all 3 reviewers
-    if has_review:
-        return 'review', ['grok', 'codex', 'opus']
-
-    # Architecture → Opus + Grok (co-architects) + DeepSeek for reasoning
-    if has_arch and not has_code:
-        return 'architecture', ['opus', 'grok']
-
-    # Code task → Grok + Codex (dual engineers)
+    # Code → Grok SOLO (single engineer, not dual)
     if has_code:
-        return 'code', ['grok', 'codex']
+        return 'code', ['grok']
 
-    # Default: Grok (most versatile)
-    return 'general', ['grok']
+    # Default → DeepSeek (cheapest paid fallback)
+    return 'general', ['deepseek']
 
 
 SYSTEM_PROMPTS = {
-    'grok': "You are a lead engineer, co-architect, and primary debugger with a 2M token context window. You can scan entire codebases. Write clean code, design robust systems, and diagnose bugs with surgical precision. Be concise.",
-    'codex': "You are a lead engineer. Write clean, production code. Be concise — code first, minimal explanation.",
-    'opus': "You are the system architect. Design robust solutions. When reviewing code, be specific about bugs and fixes.",
-    'deepseek': "You are a senior researcher and deep reasoning engine. Provide thorough technical analysis. Be concise.",
+    'grok': "Lead engineer + debugger. 2M context. Code first, minimal prose. Production-ready.",
+    'codex': "Engineer + reviewer. Clean code, spot bugs. Concise.",
+    'opus': "System architect. Design decisions, tradeoffs, component boundaries. No code unless asked.",
+    'deepseek': "Researcher. Technical analysis, comparisons, reasoning. Concise.",
 }
 
 
@@ -273,8 +267,8 @@ def run_pipeline(user_message):
     # ─── CHAT ONLY: Gemma handles it, zero paid tokens ───
     if task_type == 'chat':
         text, tokens = call_model('gemma',
-            "You are the Leviathan Cloud OS development team interface. Answer the user's question directly and concisely. You are friendly but efficient.",
-            user_message, max_tokens=1000)
+            "Leviathan dev team interface. Direct, concise answers.",
+            user_message, max_tokens=800)
         result['response'] = text or "I'm here. What do you need?"
         result['models_used'] = ['Gemma 3']
         if isinstance(tokens, dict):
@@ -329,20 +323,18 @@ def run_pipeline(user_message):
         # Use Gemma to synthesize (free) instead of burning paid tokens
         combined = "\n\n".join(f"[{MODELS[k]['name']}]:\n{v}" for k, v in responses.items())
         review_text, _ = call_model('gemma',
-            "You are synthesizing code from multiple engineers into one final implementation. "
-            "Pick the best parts from each, resolve conflicts, present one clean solution. "
-            "Keep all code blocks intact. Be concise.",
-            f"User asked: {user_message}\n\nEngineer outputs:\n{combined}",
-            max_tokens=2000)
+            "Merge engineer outputs into one clean solution. Keep code blocks. Concise.",
+            f"Task: {user_message}\n\nOutputs:\n{combined}",
+            max_tokens=1500)
         result['response'] = review_text or combined
         result['models_used'].append('Gemma 3 (synthesis)')
     elif len(responses) > 1:
         # Multiple non-code responses: Gemma synthesizes (free)
         combined = "\n\n".join(f"[{MODELS[k]['name']}]:\n{v}" for k, v in responses.items())
         synth_text, _ = call_model('gemma',
-            "Synthesize these expert responses into one coherent answer. Keep it concise and actionable.",
-            f"User asked: {user_message}\n\nTeam responses:\n{combined}",
-            max_tokens=1500)
+            "Merge these into one concise answer.",
+            f"Task: {user_message}\n\nResponses:\n{combined}",
+            max_tokens=1200)
         result['response'] = synth_text or combined
         result['models_used'].append('Gemma 3 (synthesis)')
     else:
@@ -371,13 +363,13 @@ def api_chat():
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'healthy', 'version': '4.0', 'timestamp': datetime.now().isoformat()})
+    return jsonify({'status': 'healthy', 'version': '4.3-lean', 'timestamp': datetime.now().isoformat()})
 
 
 @app.route('/status')
 def status():
     return jsonify({
-        'version': '4.0',
+        'version': '4.3-lean',
         'architecture': 'Gemma bridge + paid model execution',
         'models': {k: {'name': v['name'], 'role': v['role'], 'cost': v['cost']} for k, v in MODELS.items()},
         'api_keys': {k: bool(v) for k, v in API_KEYS.items()},
