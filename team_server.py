@@ -495,19 +495,11 @@ def start_discord_bot():
         if message.author == bot.user:
             return
 
-        # Respond to DMs, @mentions, or messages in any channel the bot can see
-        is_dm = message.guild is None
-        is_mention = bot.user in message.mentions if message.guild else False
-
-        # In guild channels: only respond to @mentions or if message starts with !team
-        if message.guild and not is_mention and not message.content.startswith('!team'):
-            return
-
-        # Strip the mention/command prefix
+        # Strip mentions if present
         content = message.content
-        if is_mention:
+        if bot.user in (message.mentions or []):
             content = content.replace(f'<@{bot.user.id}>', '').replace(f'<@!{bot.user.id}>', '').strip()
-        elif content.startswith('!team'):
+        if content.startswith('!team'):
             content = content[5:].strip()
 
         if not content:
