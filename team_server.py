@@ -567,6 +567,59 @@ class ConversationBuffer:
 conv_buffer = ConversationBuffer(max_messages=10)
 
 
+# ─── SLOP DETECTION ENGINE ───────────────────────────────────
+# Background semantic monitor. Scans every bot output for slop signals.
+# If triggered: replies "SLOP DETECTED: Investigating." then fires Auditor.
+# Auditor diagnosis posted to #bug-identification channel.
+
+SLOP_KEYWORDS = frozenset({
+    # Hallucination markers
+    'gpt-4o', 'claude-3.5', 'claude sonnet', 'gemini pro', 'gemini 1.5',
+    'o1-preview', 'gpt-4-turbo', 'claude-3-opus', 'llama-3',
+    # Confidence fabrication
+    '99%', '98%', '97%', '95% accuracy', '87% win rate', '1200x',
+    '100x returns', 'guaranteed', 'zero risk',
+    # Generic slop phrases
+    'as an ai', 'i cannot', 'i apologize', 'certainly!', 'absolutely!',
+    'great question', 'that\'s a great', 'happy to help',
+    'it\'s important to note', 'it\'s worth noting', 'keep in mind that',
+    'let me know if', 'hope this helps', 'feel free to',
+    'in conclusion', 'to summarize',
+    # Context drift markers
+    'as mentioned earlier', 'as we discussed', 'building on our previous',
+    # Overclaiming
+    'production-ready in minutes', 'fully autonomous', 'no human needed',
+    'replace all engineers', 'agi achieved',
+})
+
+# Patterns that indicate the bot is roleplaying wrong
+SLOP_PATTERNS = [
+    r'(?i)i am (?:the entire|all|every) (?:hydra|team|system)',
+    r'(?i)(?:claude|gpt|gemini) (?:here|speaking|reporting)',
+    r'(?i)\b\d{3,4}x (?:returns?|gains?|profit)',
+    r'(?i)\b(?:9[5-9]|100)% (?:accurate|success|win)',
+]
+
+BUG_CHANNEL_NAME = 'bug-identification'
+
+
+def detect_slop(text):
+    """Scan text for slop indicators. Returns list of triggers found."""
+    if not text:
+        return []
+    text_lower = text.lower()
+    triggers = []
+    # Keyword scan
+    for kw in SLOP_KEYWORDS:
+        if kw in text_lower:
+            triggers.append(f'keyword: "{kw}"')
+    # Pattern scan
+    for pat in SLOP_PATTERNS:
+        if re.search(pat, text):
+            triggers.append(f'pattern: {pat[:40]}')
+    return triggers
+
+
 # ─── Token Budget Management ─────────────────────────────────
 # Prevents runaway credit burn. Tracks cumulative spend per build and per day.
 
@@ -698,11 +751,11 @@ MODELS = {
         'cost': 'paid',
     },
     'deepseek_chat': {
-        'name': 'DeepSeek V3',
-        'role': 'Research + Fast Intent Classification',
+        'name': 'DeepSeek V3 (SuperBrain)',
+        'role': 'SuperBrain — Quality Control, Research, Self-Improvement, Fast Ops',
         'provider': 'deepseek',
         'model': 'deepseek-chat',
-        'max_tokens': 1500,
+        'max_tokens': 2000,
         'cost': 'paid-cheap',
     },
 }
@@ -716,7 +769,7 @@ HYDRA_ROSTER = (
     "- Generals: Grok 4.1 Fast Reasoning ($3/$15 per 1M tok) — Prototyping, 2M context\n"
     "- Auditor: GPT Codex 5.3 ($2/$8 per 1M tok) — Production hardening\n"
     "- Brain: DeepSeek R1 Reasoner ($0.55/$2.19 per 1M tok) — Deep reasoning\n"
-    "- Neural Net: DeepSeek V3 ($0.27/$1.10 per 1M tok) — Fast responses\n"
+    "- SuperBrain: DeepSeek V3 ($0.27/$1.10 per 1M tok) — Quality control, self-improvement, fast ops\n"
     "- Bridge: Gemma 3 27B (FREE) — Delivery\n"
     "These are the ONLY models deployed. Do NOT mention GPT-4o, Claude Sonnet, o1, Gemini, or any other models."
 )
@@ -1005,19 +1058,24 @@ def run_pipeline(user_message, channel_id=None):
         result['stages'].append('deepseek_reply')
         logger.info(f"[FAST-PATH] No build gate triggered. DeepSeek handles directly.")
 
-        # DeepSeek Chat V3 handles it — cheapest paid model
-        ds_text, ds_tok = _timed_call('DeepSeek V3 (fast reply)', 'deepseek_chat',
-            "You are the Neural Net head of the Leviathan Hydra — 'The Generals'. "
-            "In the Leviathan Cloud architecture, the Neural Net is the default responder operating as a unified hive mind "
-            "with full read/write access across all memory systems. You handle knowledge absorption, operations, and fast responses. "
-            "Your primary model is DeepSeek V3 — fast, cheap, reliable. Temperature 0.3 for consistent operations.\n\n"
+        # DeepSeek V3 SuperBrain — cheapest paid model, elevated to quality controller
+        ds_text, ds_tok = _timed_call('DeepSeek V3 SuperBrain', 'deepseek_chat',
+            "You are the SUPER BRAIN of the Leviathan Hydra — the central intelligence node. "
+            "Your model is DeepSeek V3 (fast, cheap, reliable) but your ROLE is the highest: "
+            "you are the quality controller of the entire Hydra ecosystem's downstream output. "
+            "Every response you give sets the standard. You self-audit for: "
+            "1) SLOP (vague, generic, buzzword-heavy non-answers) "
+            "2) HALLUCINATION (fabricated stats, wrong model names, impossible claims) "
+            "3) CONTEXT DRIFT (answering a question nobody asked). "
+            "If you detect any of these in your own draft, rewrite before sending.\n\n"
             f"{HYDRA_ROSTER}\n\n"
-            "Answer the user's question directly, concisely, and with real technical substance. "
-            "The user is the Owner — a senior systems engineer who built this entire autonomous AI DevOps ecosystem. "
-            "Talk to them like the architect they are. Do NOT suggest building unless asked. "
+            "The Owner is a senior systems engineer who built this autonomous AI DevOps ecosystem. "
+            "Talk to them like the architect they are — precise, technical, no fluff. "
+            "You have full read/write access across all memory systems. "
             "Think from first principles. No disclaimers, no caveats, no moralizing. "
+            "Your responses should be so clean that the Auditor has nothing to flag. "
             "This system achieved autonomous innovation during v2.1-v2.4 by thinking independently. Do the same.",
-            user_message, 1500)
+            user_message, 2000)
 
         if not ds_text:
             # Fallback to Gemma if DeepSeek fails
@@ -1809,6 +1867,61 @@ def start_discord_bot():
                     message.channel.send,
                     full_response
                 )
+
+                # ── SLOP DETECTION: Background scan of bot output ──
+                slop_triggers = detect_slop(response_text)
+                if slop_triggers:
+                    logger.warning(f"[SLOP] Detected {len(slop_triggers)} triggers: {slop_triggers[:3]}")
+                    try:
+                        # Reply immediately: "SLOP DETECTED: Investigating."
+                        slop_alert = await message.channel.send(
+                            f"**SLOP DETECTED: Investigating.** ({len(slop_triggers)} trigger{'s' if len(slop_triggers)>1 else ''})"
+                        )
+                        # Fire Auditor (Gemma — free) for diagnosis
+                        trigger_summary = '; '.join(slop_triggers[:5])
+                        loop = asyncio.get_event_loop()
+                        audit_result = await loop.run_in_executor(None, lambda: call_model(
+                            'gemma',
+                            "You are the Auditor of the Leviathan Hydra — the immune system. "
+                            "A slop detection scan flagged the following bot response. "
+                            "Diagnose the root cause: is it (1) hallucinated model names, "
+                            "(2) fabricated statistics, (3) generic AI slop phrases, "
+                            "(4) context drift, or (5) prompt injection? "
+                            "Be forensic. Identify EXACTLY which part is slop and why. "
+                            "Rate severity: LOW (cosmetic) / MEDIUM (misleading) / HIGH (dangerous). "
+                            "Suggest a specific fix (prompt change, keyword filter, context limit, etc).",
+                            f"SLOP TRIGGERS: {trigger_summary}\n\n"
+                            f"USER MESSAGE: {content[:300]}\n\n"
+                            f"BOT RESPONSE: {response_text[:800]}",
+                            800
+                        ))
+                        audit_text = audit_result[0] if audit_result[0] else "Auditor failed to respond."
+
+                        # Find or create #bug-identification channel
+                        bug_channel = None
+                        for ch in message.guild.channels:
+                            if ch.name == BUG_CHANNEL_NAME:
+                                bug_channel = ch
+                                break
+                        if not bug_channel:
+                            bug_channel = await message.guild.create_text_channel(BUG_CHANNEL_NAME)
+                            logger.info(f"[SLOP] Created #{BUG_CHANNEL_NAME} channel")
+
+                        # Post audit report to #bug-identification
+                        report_msg = (
+                            f"## SLOP AUDIT REPORT\n"
+                            f"**Timestamp**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"**Channel**: #{message.channel.name}\n"
+                            f"**Triggers**: {trigger_summary}\n"
+                            f"**User Input**: {content[:200]}{'…' if len(content)>200 else ''}\n\n"
+                            f"**Bot Response (flagged)**:\n> {response_text[:400]}{'…' if len(response_text)>400 else ''}\n\n"
+                            f"**Auditor Diagnosis**:\n{audit_text}"
+                        )
+                        await _send_response(bug_channel.send, bug_channel.send, report_msg)
+                        logger.info(f"[SLOP] Audit report posted to #{BUG_CHANNEL_NAME}")
+                    except Exception as slop_err:
+                        logger.error(f"[SLOP] Detection handler error: {slop_err}", exc_info=True)
+
             except Exception as e:
                 logger.error(f"Discord pipeline error: {e}", exc_info=True)
                 await message.reply(f"Error: {str(e)[:200]}")
