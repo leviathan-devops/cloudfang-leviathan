@@ -33,6 +33,7 @@ import logging
 import asyncio
 import sqlite3
 import hashlib
+from collections import deque
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -286,10 +287,16 @@ class HydraMemory:
     # This is the critical piece: build a COMPACT context string
     # that gets injected into system prompts. Max ~300 tokens.
 
-    def build_context_injection(self, agent_name, task_hint=''):
+    def build_context_injection(self, agent_name, task_hint='', channel_id=None):
         """Build a compact context string for prompt injection.
-        Max ~300 tokens. Hot memory only — no bloat."""
+        Max ~500 tokens. Hot memory + conversation context — no bloat."""
         parts = []
+
+        # T1 CONVERSATION CONTEXT (last 5 owner messages + bot responses)
+        if channel_id:
+            conv_ctx = conv_buffer.get_context(channel_id)
+            if conv_ctx:
+                parts.append(conv_ctx)
 
         # Recent builds (1-liner each)
         builds = self.get_recent_builds(limit=3)
@@ -323,11 +330,13 @@ class HydraMemory:
         if not parts:
             return ''
 
-        context = "── HYDRA PERSISTENT MEMORY ──\n" + '\n'.join(parts) + "\n── END MEMORY ──"
+        context = "── HYDRA MEMORY ──\n" + '\n'.join(parts) + "\n── END ──"
 
-        # Hard cap: 1500 chars (~300 tokens). Truncate if needed.
+        # Hard cap: 1500 chars (~300 tokens). UNCHANGED from v2.7.
+        # The conversation buffer is internally capped at 600 chars (~120 tokens).
+        # Total worst case: 600 (conv) + 900 (knowledge+builds+activity) = 1500. No bloat.
         if len(context) > 1500:
-            context = context[:1490] + "\n..."
+            context = context[:1490] + "\n…"
 
         return context
 
@@ -404,6 +413,71 @@ class HydraMemory:
 
 # Initialize persistent memory
 memory = HydraMemory()
+
+
+# ─── Conversation Buffer — T1 Short-Term Context ─────────────
+# Stores last 5 Owner messages + bot responses per channel.
+# Injected into system prompt as T1 hot context so the bot
+# remembers what was just said. Lightweight: ~200-500 tokens max.
+# This is a stopgap until Leviathan Vision (v3.1) is implemented.
+
+class ConversationBuffer:
+    """Per-channel ring buffer for recent Owner messages.
+    ULTRA-COMPACT: Stores only first 80 chars of owner messages,
+    first 60 chars of bot responses. Hard cap: 600 chars total output (~120 tokens).
+    This is a T1 hot context buffer, NOT a full history store.
+    Thread-safe via lock."""
+
+    # Hard budget: max 600 chars output = ~120 tokens. Non-negotiable.
+    MAX_OUTPUT_CHARS = 600
+
+    def __init__(self, max_owner_messages=5):
+        self.max_messages = max_owner_messages
+        self.buffers = {}  # channel_id -> deque of {role, content}
+        self.lock = threading.Lock()
+
+    def record_owner_message(self, channel_id, content):
+        """Record an Owner message — compressed to first 80 chars."""
+        with self.lock:
+            if channel_id not in self.buffers:
+                self.buffers[channel_id] = deque(maxlen=self.max_messages * 2)
+            # 80 chars max per owner message — just enough to capture intent
+            truncated = content[:80].replace('\n', ' ').strip()
+            if len(content) > 80:
+                truncated += '…'
+            self.buffers[channel_id].append({'role': 'O', 'content': truncated})
+
+    def record_bot_response(self, channel_id, content):
+        """Record a bot response — compressed to first 60 chars (topic continuity only)."""
+        with self.lock:
+            if channel_id not in self.buffers:
+                self.buffers[channel_id] = deque(maxlen=self.max_messages * 2)
+            # 60 chars max — just enough to know what we said, not reproduce it
+            truncated = content[:60].replace('\n', ' ').strip()
+            if len(content) > 60:
+                truncated += '…'
+            self.buffers[channel_id].append({'role': 'B', 'content': truncated})
+
+    def get_context(self, channel_id):
+        """Build an ultra-compact conversation context string.
+        Hard capped at 600 chars (~120 tokens). Returns '' if empty."""
+        with self.lock:
+            buf = self.buffers.get(channel_id)
+            if not buf or len(buf) == 0:
+                return ''
+            lines = []
+            for entry in buf:
+                lines.append(f"{entry['role']}: {entry['content']}")
+            context = "RECENT CHAT:\n" + '\n'.join(lines)
+            # Hard cap enforcement
+            if len(context) > self.MAX_OUTPUT_CHARS:
+                context = context[:self.MAX_OUTPUT_CHARS - 3] + '…'
+            return context
+
+
+# Global conversation buffer
+conv_buffer = ConversationBuffer(max_owner_messages=5)
+
 
 # ─── Token Budget Management ─────────────────────────────────
 # Prevents runaway credit burn. Tracks cumulative spend per build and per day.
@@ -713,9 +787,9 @@ def _track(result, model_name, text, tokens):
         result['tokens']['output'] += tokens.get('output', 0)
 
 
-def run_pipeline(user_message):
+def run_pipeline(user_message, channel_id=None):
     """
-    v5.4 Hydra Execution Pipeline.
+    v5.5-memory Hydra Execution Pipeline.
 
     DEFAULT PATH (99% of messages):
       Generals (DeepSeek V3) handles directly. ~$0.001/msg. Low latency.
@@ -743,9 +817,9 @@ def run_pipeline(user_message):
 
     def _timed_call(label, model_key, system_prompt, user_msg, max_tok=None):
         """Call a model and record timing + token telemetry.
-        Injects persistent memory context into system prompt (Layer 4: startup injection)."""
-        # Layer 4: Inject compact memory context before the call
-        mem_context = memory.build_context_injection(label, user_message[:200])
+        Injects persistent memory + conversation context into system prompt (Layer 4: startup injection)."""
+        # Layer 4: Inject compact memory context + T1 conversation buffer before the call
+        mem_context = memory.build_context_injection(label, user_message[:200], channel_id=channel_id)
         if mem_context:
             system_prompt = f"{system_prompt}\n\n{mem_context}"
 
@@ -1453,7 +1527,11 @@ def start_discord_bot():
         # Defer immediately — builds take a long time
         await interaction.response.defer()
         loop = asyncio.get_event_loop()
+        channel_id = str(interaction.channel_id) if interaction.channel_id else None
         try:
+            # Record Owner's build task to conversation buffer
+            if channel_id:
+                conv_buffer.record_owner_message(channel_id, f"/build {task}")
             # Read attached file if provided
             full_task = task
             if file:
@@ -1461,7 +1539,7 @@ def start_discord_bot():
                 if file_content:
                     full_task = f"{task}\n\n{file_content}"
             # Force build gate by prepending /build
-            result = await loop.run_in_executor(None, run_pipeline, f"/build {full_task}")
+            result = await loop.run_in_executor(None, run_pipeline, f"/build {full_task}", channel_id)
             response_text = result.get('response', 'No response generated.')
             models = result.get('models_used', [])
             proc_time = result.get('processing_time', '?')
@@ -1542,16 +1620,23 @@ def start_discord_bot():
         if not content:
             return
 
+        # T1 CONTEXT: Record Owner message to conversation buffer
+        channel_id = str(message.channel.id)
+        conv_buffer.record_owner_message(channel_id, content)
+
         # Regular messages always go through fast path (never build)
         async with message.channel.typing():
             loop = asyncio.get_event_loop()
             try:
-                result = await loop.run_in_executor(None, run_pipeline, content)
+                result = await loop.run_in_executor(None, run_pipeline, content, channel_id)
                 response_text = result.get('response', 'No response generated.')
                 models = result.get('models_used', [])
                 proc_time = result.get('processing_time', '?')
                 footer = f"\n-# {' · '.join(models)} · {proc_time}" if models else ""
                 full_response = response_text + footer
+
+                # T1 CONTEXT: Record bot response to conversation buffer
+                conv_buffer.record_bot_response(channel_id, response_text)
 
                 await _send_response(
                     message.reply,
