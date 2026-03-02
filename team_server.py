@@ -1155,11 +1155,11 @@ budget = TokenBudget(
 # ─── API Configuration ────────────────────────────────────────
 
 API_KEYS = {
-    'anthropic': os.environ.get('ANTHROPIC_API_KEY', ''),
-    'openai': os.environ.get('OPENAI_API_KEY', ''),
-    'deepseek': os.environ.get('DEEPSEEK_API_KEY', ''),
-    'xai': os.environ.get('XAI_API_KEY', ''),
     'openrouter': os.environ.get('OPENROUTER_API_KEY', ''),
+    'deepseek': os.environ.get('DEEPSEEK_API_KEY', ''),
+    'gemini': os.environ.get('GEMINI_API_KEY', ''),
+    'groq': os.environ.get('GROQ_API_KEY', ''),
+    'cerebras': os.environ.get('CEREBRAS_API_KEY', ''),
 }
 
 # ─── Model Definitions ────────────────────────────────────────
@@ -2394,6 +2394,8 @@ def start_discord_bot():
     @discord.app_commands.describe(query="Optional: search memory for a keyword")
     async def memory_command(interaction: discord.Interaction, query: str = None):
         await interaction.response.defer()
+        query_display = query if query else "(no filter)"
+        await interaction.channel.send(f"**{interaction.user.display_name}** used `/memory {query_display}`")
         try:
             if query:
                 # Search mode
@@ -2431,6 +2433,7 @@ def start_discord_bot():
     @tree.command(name="dmm", description="View Dynamic Memory Manager (v2.9) stats", guild=target_guild)
     async def dmm_command(interaction: discord.Interaction):
         await interaction.response.defer()
+        await interaction.channel.send(f"**{interaction.user.display_name}** used `/dmm`")
         try:
             if not dmm_daemon:
                 await interaction.followup.send("❌ DMM daemon not initialized")
@@ -2470,6 +2473,7 @@ def start_discord_bot():
     @discord.app_commands.describe(idea="Describe what you want to build — the system will estimate cost and time")
     async def cost_command(interaction: discord.Interaction, idea: str):
         await interaction.response.defer()
+        await interaction.channel.send(f"**{interaction.user.display_name}** used `/cost {idea}`")
         try:
             # Use DeepSeek Chat (cheapest) to analyze the idea and estimate stages
             # Then apply REAL TokenBudget.COST_PER_M pricing to the estimate
@@ -2531,6 +2535,7 @@ def start_discord_bot():
     @discord.app_commands.checks.has_permissions(administrator=True)
     async def wipe_command(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        await interaction.channel.send(f"**{interaction.user.display_name}** used `/wipe`")
         channel = interaction.channel
         try:
             deleted_total = 0
@@ -2558,37 +2563,12 @@ def start_discord_bot():
         else:
             await interaction.response.send_message(f"Error: {str(error)[:200]}", ephemeral=True)
 
-    # ── /build-heavy slash command (full frontier AGI DevTeam) ──
-    @tree.command(name="build-heavy", description="AGI DevTeam: ONE-SHOT military-grade build (R1 → Opus → Grok → Codex → verification). Uses paid APIs.", guild=target_guild)
-    @discord.app_commands.describe(task="What do you want the AGI DevTeam to build?", file="Attach a file (code, config, etc.) for context")
-    async def build_heavy_command(interaction: discord.Interaction, task: str, file: discord.Attachment = None):
-        await interaction.response.defer()
-        loop = asyncio.get_event_loop()
-        channel_id = str(interaction.channel_id) if interaction.channel_id else None
-        try:
-            if channel_id:
-                conv_buffer.record_owner_message(channel_id, f"/build-heavy {task}")
-            full_task = task
-            if file:
-                file_content = await _read_attachments([file])
-                if file_content:
-                    full_task = f"{task}\n\n{file_content}"
-            result = await loop.run_in_executor(None, run_pipeline, f"/build-heavy {full_task}", channel_id)
-            response_text = result.get('response', 'No response generated.')
-            models = result.get('models_used', [])
-            proc_time = result.get('processing_time', '?')
-            footer = f"\n-# AGI DevTeam · {' · '.join(models)} · {proc_time}" if models else ""
-            full_response = response_text + footer
-            await _send_response(interaction.followup.send, interaction.followup.send, full_response)
-        except Exception as e:
-            logger.error(f"Discord /build-heavy error: {e}", exc_info=True)
-            await interaction.followup.send(f"Build failed: {str(e)[:500]}")
-
     # ── /build-light slash command (free Qwen + DeepSeek iteration pipeline) ──
     @tree.command(name="build-light", description="Light build: FREE Qwen 3 coders + R1 architect. Iterate as much as you want.", guild=target_guild)
     @discord.app_commands.describe(task="What do you want to build? (iterate freely, near-zero cost)", file="Attach a file (code, config, etc.) for context")
     async def build_light_command(interaction: discord.Interaction, task: str, file: discord.Attachment = None):
         await interaction.response.defer()
+        await interaction.channel.send(f"**{interaction.user.display_name}** used `/build-light {task}`")
         loop = asyncio.get_event_loop()
         channel_id = str(interaction.channel_id) if interaction.channel_id else None
         try:
@@ -2609,32 +2589,6 @@ def start_discord_bot():
         except Exception as e:
             logger.error(f"Discord /build-light error: {e}", exc_info=True)
             await interaction.followup.send(f"Light build failed: {str(e)[:500]}")
-
-    # ── /build legacy alias (defaults to heavy) ──────────────
-    @tree.command(name="build", description="[Legacy] Same as /build-heavy. Use /build-light for free iterations.", guild=target_guild)
-    @discord.app_commands.describe(task="What do you want the dev team to build?", file="Attach a file (code, config, etc.) for context")
-    async def build_command(interaction: discord.Interaction, task: str, file: discord.Attachment = None):
-        await interaction.response.defer()
-        loop = asyncio.get_event_loop()
-        channel_id = str(interaction.channel_id) if interaction.channel_id else None
-        try:
-            if channel_id:
-                conv_buffer.record_owner_message(channel_id, f"/build-heavy {task}")
-            full_task = task
-            if file:
-                file_content = await _read_attachments([file])
-                if file_content:
-                    full_task = f"{task}\n\n{file_content}"
-            result = await loop.run_in_executor(None, run_pipeline, f"/build-heavy {full_task}", channel_id)
-            response_text = result.get('response', 'No response generated.')
-            models = result.get('models_used', [])
-            proc_time = result.get('processing_time', '?')
-            footer = f"\n-# AGI DevTeam · {' · '.join(models)} · {proc_time}" if models else ""
-            full_response = response_text + footer
-            await _send_response(interaction.followup.send, interaction.followup.send, full_response)
-        except Exception as e:
-            logger.error(f"Discord /build error: {e}", exc_info=True)
-            await interaction.followup.send(f"Build failed: {str(e)[:500]}")
 
     # ── Sync slash commands on ready ──────────────────────────
     @bot.event
