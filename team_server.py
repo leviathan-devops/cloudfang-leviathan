@@ -584,6 +584,15 @@ conv_buffer = ConversationBuffer(max_messages=10)
 # If triggered: replies "SLOP DETECTED: Investigating." then fires Auditor.
 # Auditor diagnosis posted to #bug-identification channel.
 
+# Trading and financial context keywords — used to suppress false positives
+TRADING_CONTEXT_KEYWORDS = frozenset({
+    'polymarket', 'trading bot', 'trade history', 'win rate', 'winrate',
+    'returns', 'profit', 'pnl', 'position', 'entry', 'exit', 'backtest',
+    'btc', 'eth', 'sol', 'xrp', 'crypto', 'on-chain', 'wallet',
+    'prediction market', 'price action', 'volume', 'liquidity',
+    'leverage', 'short', 'long', 'liquidation', 'margin call',
+})
+
 SLOP_KEYWORDS = frozenset({
     # Hallucination markers
     'gpt-4o', 'claude-3.5', 'claude sonnet', 'gemini pro', 'gemini 1.5',
@@ -616,19 +625,42 @@ BUG_CHANNEL_NAME = 'bug-identification'
 
 
 def detect_slop(text):
-    """Scan text for slop indicators. Returns list of triggers found."""
+    """Scan text for slop indicators. Returns list of triggers found.
+
+    Context-aware: Suppresses false positives in trading/financial contexts.
+    Trading keywords (polymarket, crypto, trading bot, etc.) exempt percentages,
+    returns figures, and overclaiming phrases that are legitimate in that domain.
+    """
     if not text:
         return []
     text_lower = text.lower()
     triggers = []
+
+    # Check if this is a trading/financial context
+    is_trading_context = any(kw in text_lower for kw in TRADING_CONTEXT_KEYWORDS)
+
+    # Keywords to suppress in trading context
+    trading_suppressed_keywords = {
+        '99%', '98%', '97%', '95% accuracy', '87% win rate', '1200x',
+        '100x returns', 'fully autonomous', 'production-ready in minutes',
+    }
+
     # Keyword scan
     for kw in SLOP_KEYWORDS:
+        # Skip trading-suppressed keywords if this is a trading context
+        if is_trading_context and kw in trading_suppressed_keywords:
+            continue
         if kw in text_lower:
             triggers.append(f'keyword: "{kw}"')
-    # Pattern scan
+
+    # Pattern scan — suppress high-percentage and return patterns in trading context
     for pat in SLOP_PATTERNS:
+        # Skip percentage/return patterns in trading context
+        if is_trading_context and (r'\d{3,4}x' in pat or r'(?:9[5-9]|100)%' in pat):
+            continue
         if re.search(pat, text):
             triggers.append(f'pattern: {pat[:40]}')
+
     return triggers
 
 
