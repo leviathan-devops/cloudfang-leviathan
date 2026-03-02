@@ -77,8 +77,8 @@ MODELS = {
     'opus': {
         'name': 'Opus',
         'role': 'Architect (design decisions only)',
-        'provider': 'openrouter',
-        'model': 'anthropic/claude-sonnet-4-5',
+        'provider': 'anthropic',
+        'model': 'claude-sonnet-4-5-20250929',
         'max_tokens': 1500,
         'cost': 'paid',
     },
