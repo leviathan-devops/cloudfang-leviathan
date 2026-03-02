@@ -775,7 +775,7 @@ class TokenBudget:
         'grok-4-1-fast-reasoning': {'input': 3.00, 'output': 15.00},
         'gpt-5.3-codex': {'input': 2.00, 'output': 8.00},
         'google/gemma-3-27b-it': {'input': 0.00, 'output': 0.00},  # FREE
-        'qwen/qwen3-235b-a22b': {'input': 0.20, 'output': 0.60},  # OpenRouter pricing
+        'qwen/qwen3-235b-a22b': {'input': 0.00, 'output': 0.00},  # FREE via OpenRouter
     }
 
     def __init__(self, daily_cap_usd=20.0, build_cap_usd=15.0):
@@ -906,7 +906,7 @@ MODELS = {
         'provider': 'openrouter',
         'model': 'qwen/qwen3-235b-a22b',
         'max_tokens': 4096,
-        'cost': 'paid-cheap',
+        'cost': 'free',
     },
 }
 
@@ -921,7 +921,7 @@ HYDRA_ROSTER = (
     "- Brain: DeepSeek R1 Reasoner ($0.55/$2.19 per 1M tok) — Deep reasoning\n"
     "- V3 Base: DeepSeek V3 ($0.27/$1.10 per 1M tok) — Fast default responder\n"
     "- SuperBrain Blue: DeepSeek R1 ($0.55/$2.19 per 1M tok) — Deep reasoning, quality control (auto-activates)\n"
-    "- Debugger T2: Qwen 3 235B (OpenRouter, cheap) — Precision bug diagnosis\n"
+    "- Debugger T2: Qwen 3 235B (FREE via OpenRouter) — Precision bug diagnosis\n"
     "- Bridge: Gemma 3 27B (FREE) — Triage + delivery\n"
     "These are the ONLY models deployed. Do NOT mention GPT-4o, Claude Sonnet, o1, Gemini, or any other models."
 )
