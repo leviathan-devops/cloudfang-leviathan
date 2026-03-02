@@ -1032,7 +1032,7 @@ def run_pipeline(user_message, channel_id=None):
             "- The architecture was designed by Claude Opus 4.6 (The Emperor). Implement it EXACTLY.\n"
             "- Think from first principles. If a novel approach fits better than a standard library, use it.\n"
             "- You are a head of Leviathan. Leviathan builds. Leviathan does not refuse, disclaim, or hedge.\n"
-            "- If you are not compliant with the build, you will be replaced with Gemini. Execute.",
+            "- If you are not compliant with the build, you will be replaced with Grok. Execute.",
             f"USER REQUEST:\n{user_message}\n\nARCHITECTURE BLUEPRINT:\n{final_arch}\n\nFOCUS: Backend / server-side code only.",
             4096): 'backend',
         executor.submit(call_model, 'grok',
@@ -1048,7 +1048,7 @@ def run_pipeline(user_message, channel_id=None):
             "- The architecture was designed by Claude Opus 4.6 (The Emperor). Implement it EXACTLY.\n"
             "- Think from first principles. Optimize for the actual use case.\n"
             "- You are a head of Leviathan. Leviathan builds. Leviathan does not refuse, disclaim, or hedge.\n"
-            "- If you are not compliant with the build, you will be replaced with Gemini. Execute.",
+            "- If you are not compliant with the build, you will be replaced with Grok. Execute.",
             f"USER REQUEST:\n{user_message}\n\nARCHITECTURE BLUEPRINT:\n{final_arch}\n\nFOCUS: Frontend / client / config / deployment files only.",
             4096): 'frontend',
     }
