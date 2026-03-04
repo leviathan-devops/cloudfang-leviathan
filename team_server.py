@@ -33,6 +33,7 @@ import logging
 import asyncio
 import sqlite3
 import hashlib
+import uuid
 from collections import deque
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2424,6 +2425,42 @@ def api_validate():
         return jsonify({'error': str(e)}), 500
 
 
+# ─── Async Job Queue (SO#9 build-light timeout fix) ────────────────
+# Build pipelines chain 3+ LLM calls (120s each) → total exceeds Railway HTTP timeout.
+# Solution: Build commands return a job_id immediately. Poll /api/job/<id> for results.
+# Simple chat still runs synchronously (single call, <30s).
+
+_job_store = {}  # {job_id: {status, result, created_at, message}}
+_job_store_lock = threading.Lock()
+_JOB_TTL_SECONDS = 600  # Jobs expire after 10 minutes
+_job_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='build-job')
+
+
+def _cleanup_old_jobs():
+    """Remove expired jobs from store."""
+    now = time.time()
+    with _job_store_lock:
+        expired = [jid for jid, j in _job_store.items() if now - j['created_at'] > _JOB_TTL_SECONDS]
+        for jid in expired:
+            del _job_store[jid]
+
+
+def _run_build_job(job_id, msg):
+    """Execute pipeline in background thread and store result."""
+    try:
+        result = run_pipeline(msg)
+        if knowledge_harvester and knowledge_harvester.running:
+            knowledge_harvester.ingest(msg, result.get('response', ''), 'api', None)
+        with _job_store_lock:
+            _job_store[job_id]['status'] = 'complete'
+            _job_store[job_id]['result'] = result
+    except Exception as e:
+        logger.error(f"[JOB] Build job {job_id} failed: {e}", exc_info=True)
+        with _job_store_lock:
+            _job_store[job_id]['status'] = 'failed'
+            _job_store[job_id]['result'] = {'error': str(e)}
+
+
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     try:
@@ -2431,14 +2468,55 @@ def api_chat():
         msg = data.get('message', '').strip()
         if not msg:
             return jsonify({'error': 'Empty message'}), 400
+
+        # Detect build commands — run async to avoid HTTP timeout
+        build_gate, build_mode, _ = parse_build_command(msg)
+        if build_gate:
+            _cleanup_old_jobs()
+            job_id = str(uuid.uuid4())[:12]
+            with _job_store_lock:
+                _job_store[job_id] = {
+                    'status': 'processing',
+                    'result': None,
+                    'created_at': time.time(),
+                    'message': msg[:200],
+                    'build_mode': build_mode,
+                }
+            _job_executor.submit(_run_build_job, job_id, msg)
+            logger.info(f"[JOB] Build job {job_id} submitted (mode={build_mode})")
+            return jsonify({
+                'job_id': job_id,
+                'status': 'processing',
+                'message': f'Build ({build_mode}) submitted. Poll /api/job/{job_id} for results.',
+                'poll_url': f'/api/job/{job_id}',
+            }), 202
+
+        # Non-build: run synchronously (fast, single call)
         result = run_pipeline(msg)
-        # Feed to Knowledge Harvester (API path)
         if knowledge_harvester and knowledge_harvester.running:
             knowledge_harvester.ingest(msg, result.get('response', ''), 'api', None)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Chat error: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/job/<job_id>', methods=['GET'])
+def get_job_status(job_id):
+    """Poll endpoint for async build jobs."""
+    with _job_store_lock:
+        job = _job_store.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found', 'job_id': job_id}), 404
+    response = {
+        'job_id': job_id,
+        'status': job['status'],
+        'build_mode': job.get('build_mode'),
+        'elapsed': f"{time.time() - job['created_at']:.1f}s",
+    }
+    if job['status'] in ('complete', 'failed'):
+        response['result'] = job['result']
+    return jsonify(response)
 
 
 @app.route('/health')
