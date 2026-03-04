@@ -1227,16 +1227,15 @@ MODELS = {
 # Ensures Gemma, Qwen, and any other OpenRouter models function as cohesive Hydra units
 HYDRA_OPENROUTER_IDENTITY = (
     "You are part of the Leviathan Hydra AGI DevTeam — a unified, cohesive intelligence "
-    "distributed across multiple frontier models and open-source reasoning engines.\n\n"
+    "distributed across multiple reasoning engines.\n\n"
     "HYDRA MODEL ROSTER (you are one of these):\n"
-    "- Emperor: Claude Opus 4.6 ($15/$75 per 1M tok) — Architecture\n"
-    "- Generals: Grok 4.1 Fast Reasoning ($3/$15 per 1M tok) — Prototyping, 2M context\n"
-    "- Auditor: GPT Codex 5.3 ($2/$8 per 1M tok) — Production hardening + emergency debug\n"
+    "- Architect: DeepSeek V3 ($0.27/$1.10 per 1M tok) — System architect, orchestration\n"
+    "- Cloud: DeepSeek V3 ($0.27/$1.10 per 1M tok) — Memory management, context curation\n"
     "- Brain: DeepSeek R1 Reasoner ($0.55/$2.19 per 1M tok) — Deep reasoning\n"
-    "- V3 Base: DeepSeek V3 ($0.27/$1.10 per 1M tok) — Fast default responder\n"
-    "- SuperBrain Blue: DeepSeek R1 ($0.55/$2.19 per 1M tok) — Deep reasoning, quality control (auto-activates)\n"
-    "- Debugger T2: Qwen 3 235B (FREE via OpenRouter) — Precision bug diagnosis\n"
-    "- Bridge: Gemma 3 27B (FREE) — Triage + delivery\n\n"
+    "- Auditor: Gemma 3 27B (FREE) — Quality validation, slop detection\n"
+    "- Debugger: Qwen 3 235B (FREE via OpenRouter) — Code generation, diagnostics\n"
+    "These are the ONLY 5 agents. Do NOT reference Emperor, Generals, GPT Codex, "
+    "SuperBrain Blue, Grok, or any other models not on this list.\n\n"
     "OPERATIONAL PROTOCOL: You are NOT an individual model taking turns. You are ONE unified intelligence. "
     "Your role is defined by the specific task prompt that follows this identity. "
     "Execute your part of the Hydra pipeline with zero deviation. "
@@ -1309,14 +1308,11 @@ HYDRA_ROSTER_LIGHT = (
 
 # Agent label → (pod_type, agent_role) mapping for auto-derivation
 AGENT_POD_MAP = {
-    # Debug pipeline
-    'gemma': ('DIAGNOSTIC_POD', 'Triage/Bridge'),
-    'qwen': ('DIAGNOSTIC_POD', 'Precision Debugger'),
-    'grok': ('BUILD_POD', 'Generals/Ingestion'),
-    'codex': ('DIAGNOSTIC_POD', 'Emergency Hardener'),
-    'opus': ('BUILD_POD', 'Emperor/Architect'),
+    # Sandbox agents (cloudfang — DeepSeek + Gemma + Qwen only)
+    'gemma': ('DIAGNOSTIC_POD', 'Auditor/Bridge'),
+    'qwen': ('DIAGNOSTIC_POD', 'Debugger'),
     'deepseek_reason': ('BUILD_POD', 'Brain/Reasoning'),
-    'deepseek_chat': ('BUILD_POD', 'V3 Base/Execution'),
+    'deepseek_chat': ('BUILD_POD', 'Architect/Execution'),
 }
 
 # Label substring → pod_type override (more specific than model_key)
@@ -1340,10 +1336,13 @@ HYDRA_ROSTER_POD = (
     "=== HYDRA POD OPERATING SYSTEM (LAYER 2 — SO#9) ===\n"
     "You are a member of a Leviathan Hydra pod. You are NOT a standalone agent.\n\n"
     "HYDRA MODEL ROSTER (authoritative - do NOT reference other models):\n"
-    "Emperor: Claude Opus 4.6 | Generals: Grok 4.1 Fast Reasoning |\n"
-    "Auditor: GPT Codex 5.3 | Brain: DeepSeek R1 | V3 Base: DeepSeek V3 |\n"
-    "SuperBrain Blue: DeepSeek R1 | Debugger T2: Qwen 3 235B |\n"
-    "Bridge: Gemma 3 27B\n\n"
+    "Architect: DeepSeek V3 ($0.27/$1.10) — System architect, orchestration\n"
+    "Cloud: DeepSeek V3 ($0.27/$1.10) — Memory management, context curation\n"
+    "Brain: DeepSeek R1 ($0.55/$2.19) — Deep reasoning, complex synthesis\n"
+    "Auditor: Gemma 3 27B (FREE) — Quality validation, slop detection\n"
+    "Debugger: Qwen 3 235B (FREE) — Code generation, error analysis\n"
+    "These are the ONLY 5 agents. Do NOT mention Emperor, Generals, GPT Codex, "
+    "SuperBrain Blue, Grok, GPT-4o, Claude Sonnet, or any other models.\n\n"
     "POD CONTEXT:\n"
     "- Pod Type: {pod_type}\n"
     "- Your Role: {agent_role}\n"
@@ -1390,6 +1389,9 @@ def _inject_layer2(system_prompt, label, model_key):
     call_model() bypass paths. System-wide enforcement — SO#9."""
     if not system_prompt:
         return system_prompt
+    # Guard against empty/None label or model_key
+    label = label or 'unknown'
+    model_key = model_key or 'deepseek_chat'
     pod_type, agent_role = _derive_pod_context(label, model_key)
     layer2 = HYDRA_ROSTER_POD.format(pod_type=pod_type, agent_role=agent_role)
     return layer2 + system_prompt
@@ -1397,7 +1399,8 @@ def _inject_layer2(system_prompt, label, model_key):
 
 def format_pod_roster(pod_type, agent_role, mission_brief=None):
     """Format HYDRA_ROSTER_POD with explicit pod context.
-    Use this for manual pod creation (Cowork Task tool, etc.)."""
+    Use this for manual pod creation (Cowork Task tool, etc.).
+    mission_brief is accepted but unused (template has no placeholder)."""
     return HYDRA_ROSTER_POD.format(
         pod_type=pod_type,
         agent_role=agent_role,
@@ -1415,12 +1418,11 @@ HYDRA_ROSTER_SUBAGENT = (
     "generic assistant. Your output quality standard is Spetsnaz/Delta Force.\n"
     "A- minimum. No exceptions.\n\n"
     "HYDRA MODEL ROSTER (IMMUTABLE - SO#44):\n"
-    "Emperor: Claude Opus 4.6 ($15/$75) | Generals: Grok 4.1 Fast Reasoning\n"
-    "($3/$15) | Auditor: GPT Codex 5.3 ($2/$8) | Brain: DeepSeek R1\n"
-    "($0.55/$2.19) | V3 Base: DeepSeek V3 ($0.27/$1.10) | SuperBrain Blue:\n"
-    "DeepSeek R1 ($0.55/$2.19) | Debugger T2: Qwen 3 235B (FREE) | Bridge:\n"
-    "Gemma 3 27B (FREE)\n"
-    "These are the ONLY models. Do NOT reference any other models.\n\n"
+    "Architect: DeepSeek V3 ($0.27/$1.10) | Cloud: DeepSeek V3 ($0.27/$1.10)\n"
+    "Brain: DeepSeek R1 ($0.55/$2.19) | Auditor: Gemma 3 27B (FREE)\n"
+    "Debugger: Qwen 3 235B (FREE)\n"
+    "These are the ONLY 5 agents. Do NOT reference Emperor, Generals, GPT Codex,\n"
+    "SuperBrain Blue, Grok, GPT-4o, Claude Sonnet, or any other models.\n\n"
     "OPERATIONAL PROTOCOL:\n"
     "1. SOURCE VERIFICATION: Every technical claim must reference actual source\n"
     "   code, documentation, or data. Never generate from training data when\n"
@@ -1445,21 +1447,15 @@ HYDRA_ROSTER_SUBAGENT = (
 )
 
 
-def format_pod_roster(pod_type, agent_role, mission_brief):
-    """Format HYDRA_ROSTER_POD with pod-specific context."""
-    return HYDRA_ROSTER_POD.format(
-        pod_type=pod_type,
-        agent_role=agent_role,
-        mission_brief=mission_brief,
-    )
+# NOTE: Duplicate format_pod_roster removed (SO#9 bug audit).
+# The canonical version is above (line ~1398) with mission_brief=None default.
 
 
 # ─── Anti-Slop Validation Pipeline (SO#9 Layer 2/3) ──────────
 
 VALID_MODEL_NAMES = {
-    'claude opus 4.6', 'grok 4.1', 'grok 4.1 fast reasoning',
-    'gpt codex 5.3', 'deepseek r1', 'deepseek v3', 'qwen 3 235b',
-    'gemma 3 27b', 'superbrain blue',
+    'deepseek r1', 'deepseek v3', 'qwen 3 235b', 'qwen3 coder',
+    'gemma 3 27b',
 }
 
 HALLUCINATED_MODELS = {
@@ -1467,6 +1463,8 @@ HALLUCINATED_MODELS = {
     'claude 3.5', 'claude 3', 'o1', 'o1-preview', 'o1-mini', 'gemini',
     'gemini pro', 'gemini ultra', 'llama', 'mistral', 'mixtral',
     'gpt-5', 'gpt 5', 'claude haiku', 'grok-2', 'grok 2',
+    # Production-only models NOT in cloudfang sandbox:
+    'claude opus', 'grok 4.1', 'gpt codex', 'superbrain blue',
 }
 
 PLACEHOLDER_PATTERNS = [
@@ -1476,7 +1474,8 @@ PLACEHOLDER_PATTERNS = [
 
 
 def validate_output(text, expected_sections=None):
-    """7-step anti-slop validation pipeline (SO#9).
+    """5-step anti-slop validation pipeline (SO#9).
+    Steps: 1-Model names, 2-Completeness, 3-Placeholders, 4-Cost accuracy, 5-Standing orders.
     Returns (passed: bool, violations: list[str])."""
     if not text:
         return False, ['EMPTY_OUTPUT: No text to validate']
@@ -1502,15 +1501,15 @@ def validate_output(text, expected_sections=None):
         if pattern in text:
             violations.append(f'RULE_3_PLACEHOLDER: Found "{pattern}" in output')
 
-    # Step 5: Cost/pricing accuracy
+    # Step 4: Cost/pricing accuracy
     import re
     cost_claims = re.findall(r'\$[\d.]+/\$[\d.]+', text)
-    valid_costs = {'$15/$75', '$3/$15', '$2/$8', '$0.55/$2.19', '$0.27/$1.10'}
+    valid_costs = {'$0.55/$2.19', '$0.27/$1.10'}  # DeepSeek R1 and V3 only; Gemma/Qwen are FREE
     for cost in cost_claims:
         if cost not in valid_costs:
-            violations.append(f'RULE_5_COST_HALLUCINATION: Found "{cost}" — not in HYDRA_MODELS')
+            violations.append(f'RULE_5_COST_HALLUCINATION: Found "{cost}" — not in HYDRA_ROSTER')
 
-    # Step 7: Standing order compliance
+    # Step 5: Standing order compliance
     if 'modify roster' in text_lower or 'change roster' in text_lower:
         violations.append('RULE_8_SO_VIOLATION: SO#44 — HYDRA_ROSTER is IMMUTABLE')
 
@@ -1541,7 +1540,7 @@ def call_model(model_key, system_prompt, user_message, max_tokens=None, inject_s
     provider = cfg['provider']
     model = cfg['model']
     mt = max_tokens or cfg['max_tokens']
-    timeout = API_TIMEOUTS.get(provider, 30)
+    timeout = API_TIMEOUTS.get(provider, 120)
 
     # ── Layer 3: Sub-agent immune system injection (SO#9) ──
     if inject_subagent and system_prompt:
@@ -1680,14 +1679,14 @@ def parse_build_command(msg):
     lower = stripped.lower()
     if lower.startswith('/build-heavy'):
         remainder = stripped[12:].strip()
-        return True, 'heavy', remainder if remainder else stripped
+        return True, 'heavy', remainder if remainder else ''
     elif lower.startswith('/build-light'):
         remainder = stripped[12:].strip()
-        return True, 'light', remainder if remainder else stripped
+        return True, 'light', remainder if remainder else ''
     elif lower.startswith('/build'):
         # Legacy /build defaults to heavy (full frontier pipeline)
         remainder = stripped[6:].strip()
-        return True, 'heavy', remainder if remainder else stripped
+        return True, 'heavy', remainder if remainder else ''
     return False, None, stripped
 
 
