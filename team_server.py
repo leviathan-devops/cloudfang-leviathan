@@ -1520,12 +1520,15 @@ def validate_output(text, expected_sections=None):
 
 # ─── Unified API Client ───────────────────────────────────────
 
+# ── API Timeouts — MUST stay under Railway's 300s request timeout ──
+# Build-light chains 3+ calls. Each call must finish well under 300s total.
+# Previous bug: openrouter was 30s, Qwen 3 235B takes 60-120s → silent timeout.
 API_TIMEOUTS = {
-    'openrouter': 30,   # Gemma (free) — fast
-    'anthropic': 60,    # Opus — slow but worth the wait for architecture
-    'openai': 90,        # Codex 5.3 — production hardening can be heavy
-    'xai': 90,           # Grok 4.1 reasoning — can take 30-60s for code generation
-    'deepseek': 90,     # DeepSeek R1 reasoning can take 40-60s
+    'openrouter': 120,  # Qwen 3 235B / Gemma — free models can be slow
+    'anthropic': 120,   # Opus — architecture calls
+    'openai': 120,      # Codex 5.3 — production hardening
+    'xai': 120,         # Grok 4.1 reasoning — 2M context ingestion
+    'deepseek': 120,    # DeepSeek R1 reasoning — extended thinking
 }
 
 
@@ -2583,7 +2586,7 @@ def index():
 # ─── Discord Bot ─────────────────────────────────────────────
 
 DISCORD_TOKEN = os.environ.get('DISCORD_BOT_TOKEN_DEVTEAM', '')
-DISCORD_GUILD_ID = 1477804209842815382
+DISCORD_GUILD_ID = 1475947548811202613  # Leviathan guild (Owner's primary server)
 
 discord_bot = None
 _discord_lock_file = None
