@@ -2432,7 +2432,7 @@ def api_validate():
 
 _job_store = {}  # {job_id: {status, result, created_at, message}}
 _job_store_lock = threading.Lock()
-_JOB_TTL_SECONDS = 600  # Jobs expire after 10 minutes
+_JOB_TTL_SECONDS = 1800  # Jobs expire after 30 minutes (builds take 3-5 min on free models)
 _job_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='build-job')
 
 
