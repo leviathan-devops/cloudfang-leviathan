@@ -2845,32 +2845,6 @@ def start_discord_bot():
             logger.error(f"Discord /build-heavy error: {e}", exc_info=True)
             await interaction.followup.send(f"Build failed: {str(e)[:500]}")
 
-    # ── /build legacy alias (defaults to heavy) ──────────────
-    @tree.command(name="build", description="[Legacy] Same as /build-heavy. Use /build-light for free iterations.", guild=target_guild)
-    @discord.app_commands.describe(task="What do you want the dev team to build?", file="Attach a file (code, config, etc.) for context")
-    async def build_command(interaction: discord.Interaction, task: str, file: discord.Attachment = None):
-        await interaction.response.defer()
-        loop = asyncio.get_event_loop()
-        channel_id = str(interaction.channel_id) if interaction.channel_id else None
-        try:
-            if channel_id:
-                conv_buffer.record_owner_message(channel_id, f"/build-heavy {task}")
-            full_task = task
-            if file:
-                file_content = await _read_attachments([file])
-                if file_content:
-                    full_task = f"{task}\n\n{file_content}"
-            result = await loop.run_in_executor(None, run_pipeline, f"/build-heavy {full_task}", channel_id)
-            response_text = result.get('response', 'No response generated.')
-            models = result.get('models_used', [])
-            proc_time = result.get('processing_time', '?')
-            footer = f"\n-# AGI DevTeam · {' · '.join(models)} · {proc_time}" if models else ""
-            full_response = response_text + footer
-            await _send_response(interaction.followup.send, interaction.followup.send, full_response)
-        except Exception as e:
-            logger.error(f"Discord /build error: {e}", exc_info=True)
-            await interaction.followup.send(f"Build failed: {str(e)[:500]}")
-
     # ── /build-light slash command (free Qwen + DeepSeek iteration pipeline) ──
     @tree.command(name="build-light", description="Light build: FREE Qwen 3 coders + R1 architect. Iterate as much as you want.", guild=target_guild)
     @discord.app_commands.describe(task="What do you want to build? (iterate freely, near-zero cost)", file="Attach a file (code, config, etc.) for context")
