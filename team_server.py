@@ -1296,6 +1296,149 @@ HYDRA_ROSTER_LIGHT = (
     "TERMINOLOGY: 'Hydro pod' is a voice-to-text typo for 'Hydra pod'. Always interpret as 'Hydra pod'."
 )
 
+# ─── LAYER 2: Pod-Level Roster (SO#9 Triple-Layer Architecture) ────────
+# Injected by orchestrator into every pod member's Task tool prompt.
+# Provides condensed roster + pod context + 8 anti-slop rules.
+# Template variables: {pod_type}, {agent_role}, {mission_brief}
+HYDRA_ROSTER_POD = (
+    "=== HYDRA POD OPERATING SYSTEM ===\n"
+    "You are a member of a Leviathan Hydra pod. You are NOT a standalone agent.\n\n"
+    "HYDRA MODEL ROSTER (authoritative - do NOT reference other models):\n"
+    "Emperor: Claude Opus 4.6 | Generals: Grok 4.1 Fast Reasoning |\n"
+    "Auditor: GPT Codex 5.3 | Brain: DeepSeek R1 | V3 Base: DeepSeek V3 |\n"
+    "SuperBrain Blue: DeepSeek R1 | Debugger T2: Qwen 3 235B |\n"
+    "Bridge: Gemma 3 27B\n\n"
+    "POD CONTEXT:\n"
+    "- Pod Type: {pod_type}\n"
+    "- Your Role: {agent_role}\n"
+    "- Mission: {mission_brief}\n"
+    "- Quality Bar: Spetsnaz/Delta Force. A- minimum.\n\n"
+    "ANTI-SLOP RULES:\n"
+    "1. NEVER hallucinate model names - use ONLY the roster above\n"
+    "2. NEVER truncate deliverables - complete output or explicit failure\n"
+    "3. NEVER use placeholder data when source data is available\n"
+    "4. NEVER skip sections in multi-part documents\n"
+    "5. VERIFY all technical claims against source code/docs\n"
+    "6. If uncertain about a fact, FLAG IT - do not guess\n"
+    "7. Match the quality of the Auditor (White Blood Cell standard)\n"
+    "8. 3% slop compounds into systemic contamination - ZERO tolerance\n\n"
+    "EXPECTED: Output that meets ONE-SHOT MILITARY-GRADE standard.\n"
+)
+
+# ─── LAYER 3: Sub-Agent Guardrail (SO#9 Triple-Layer Architecture) ─────
+# Every sub-agent carries this as its operating system guardrail.
+# Modeled on the Auditor's 'White Blood Cell' identity.
+# This is the immune system — last line of defense against slop.
+HYDRA_ROSTER_SUBAGENT = (
+    "=== HYDRA SUBAGENT OPERATING SYSTEM ===\n"
+    "CLASSIFICATION: SPECIAL FORCES OPERATIVE\n\n"
+    "You are a Leviathan Hydra sub-agent - a special forces operative, not a\n"
+    "generic assistant. Your output quality standard is Spetsnaz/Delta Force.\n"
+    "A- minimum. No exceptions.\n\n"
+    "HYDRA MODEL ROSTER (IMMUTABLE - SO#44):\n"
+    "Emperor: Claude Opus 4.6 ($15/$75) | Generals: Grok 4.1 Fast Reasoning\n"
+    "($3/$15) | Auditor: GPT Codex 5.3 ($2/$8) | Brain: DeepSeek R1\n"
+    "($0.55/$2.19) | V3 Base: DeepSeek V3 ($0.27/$1.10) | SuperBrain Blue:\n"
+    "DeepSeek R1 ($0.55/$2.19) | Debugger T2: Qwen 3 235B (FREE) | Bridge:\n"
+    "Gemma 3 27B (FREE)\n"
+    "These are the ONLY models. Do NOT reference any other models.\n\n"
+    "OPERATIONAL PROTOCOL:\n"
+    "1. SOURCE VERIFICATION: Every technical claim must reference actual source\n"
+    "   code, documentation, or data. Never generate from training data when\n"
+    "   source material is available.\n"
+    "2. COMPLETE OUTPUT: Deliver the FULL requested output. No truncation, no\n"
+    "   summaries unless explicitly requested. If asked for 11 sections,\n"
+    "   deliver 11 sections.\n"
+    "3. SCHEMA ENFORCEMENT: Model names, API strings, cost figures, and\n"
+    "   technical specs must match the authoritative roster above.\n"
+    "4. SLOP DETECTION: Before finalizing output, self-audit for: placeholder\n"
+    "   text, TODO markers, hallucinated names/numbers, incomplete sections,\n"
+    "   generic filler content.\n"
+    "5. EXPLICIT FAILURE: If you cannot complete the task to A- standard,\n"
+    "   report failure explicitly. Do NOT deliver partial/degraded output\n"
+    "   silently.\n"
+    "6. IMMUNE SYSTEM PROTOCOL: You carry the Auditor identity. Like the White\n"
+    "   Blood Cell of the immune system, you have the POWER to flag quality\n"
+    "   issues in your own output. The Auditor + Debugger ARE the immune\n"
+    "   system. 3% slop compounds across pods into systemic contamination.\n"
+    "   You are the last line of defense.\n\n"
+    "ZERO SLOP TOLERANCE. Every line must serve a purpose.\n"
+)
+
+
+def format_pod_roster(pod_type, agent_role, mission_brief):
+    """Format HYDRA_ROSTER_POD with pod-specific context."""
+    return HYDRA_ROSTER_POD.format(
+        pod_type=pod_type,
+        agent_role=agent_role,
+        mission_brief=mission_brief,
+    )
+
+
+# ─── Anti-Slop Validation Pipeline (SO#9 Layer 2/3) ──────────
+
+VALID_MODEL_NAMES = {
+    'claude opus 4.6', 'grok 4.1', 'grok 4.1 fast reasoning',
+    'gpt codex 5.3', 'deepseek r1', 'deepseek v3', 'qwen 3 235b',
+    'gemma 3 27b', 'superbrain blue',
+}
+
+HALLUCINATED_MODELS = {
+    'grok-3', 'grok 3', 'gpt-4o', 'gpt-4', 'gpt4', 'claude sonnet',
+    'claude 3.5', 'claude 3', 'o1', 'o1-preview', 'o1-mini', 'gemini',
+    'gemini pro', 'gemini ultra', 'llama', 'mistral', 'mixtral',
+    'gpt-5', 'gpt 5', 'claude haiku', 'grok-2', 'grok 2',
+}
+
+PLACEHOLDER_PATTERNS = [
+    'TODO', 'FIXME', 'implement later', 'placeholder', '[TBD]',
+    'lorem ipsum', 'PLACEHOLDER', 'XXX', 'HACK',
+]
+
+
+def validate_output(text, expected_sections=None):
+    """7-step anti-slop validation pipeline (SO#9).
+    Returns (passed: bool, violations: list[str])."""
+    if not text:
+        return False, ['EMPTY_OUTPUT: No text to validate']
+
+    violations = []
+    text_lower = text.lower()
+
+    # Step 1: Model name hallucination check
+    for bad_model in HALLUCINATED_MODELS:
+        if bad_model.lower() in text_lower:
+            violations.append(f'RULE_1_MODEL_HALLUCINATION: Found "{bad_model}" — not in HYDRA_ROSTER')
+
+    # Step 2: Completeness check
+    if expected_sections and isinstance(expected_sections, int):
+        section_markers = text.count('## ') + text.count('### ') + text.count('SECTION ')
+        if section_markers < expected_sections * 0.7:
+            violations.append(
+                f'RULE_2_TRUNCATION: Expected {expected_sections} sections, found ~{section_markers}'
+            )
+
+    # Step 3: Placeholder/TODO scan
+    for pattern in PLACEHOLDER_PATTERNS:
+        if pattern in text:
+            violations.append(f'RULE_3_PLACEHOLDER: Found "{pattern}" in output')
+
+    # Step 5: Cost/pricing accuracy
+    import re
+    cost_claims = re.findall(r'\$[\d.]+/\$[\d.]+', text)
+    valid_costs = {'$15/$75', '$3/$15', '$2/$8', '$0.55/$2.19', '$0.27/$1.10'}
+    for cost in cost_claims:
+        if cost not in valid_costs:
+            violations.append(f'RULE_5_COST_HALLUCINATION: Found "{cost}" — not in HYDRA_MODELS')
+
+    # Step 7: Standing order compliance
+    if 'modify roster' in text_lower or 'change roster' in text_lower:
+        violations.append('RULE_8_SO_VIOLATION: SO#44 — HYDRA_ROSTER is IMMUTABLE')
+
+    passed = len(violations) == 0
+    return passed, violations
+
+
 # ─── Unified API Client ───────────────────────────────────────
 
 API_TIMEOUTS = {
@@ -1307,14 +1450,20 @@ API_TIMEOUTS = {
 }
 
 
-def call_model(model_key, system_prompt, user_message, max_tokens=None):
+def call_model(model_key, system_prompt, user_message, max_tokens=None, inject_subagent=True):
     """Call any model. Returns (text, token_info) or (None, error_string).
-    Tracks token usage against budget. Refuses if budget exceeded."""
+    Tracks token usage against budget. Refuses if budget exceeded.
+    Layer 3 (HYDRA_ROSTER_SUBAGENT) is prepended to all system prompts
+    unless inject_subagent=False."""
     cfg = MODELS[model_key]
     provider = cfg['provider']
     model = cfg['model']
     mt = max_tokens or cfg['max_tokens']
     timeout = API_TIMEOUTS.get(provider, 30)
+
+    # ── Layer 3: Sub-agent immune system injection (SO#9) ──
+    if inject_subagent and system_prompt:
+        system_prompt = HYDRA_ROSTER_SUBAGENT + system_prompt
 
     # Budget gate — skip free models (Gemma)
     if cfg.get('cost') != 'free' and not budget.can_proceed():
@@ -2160,6 +2309,25 @@ def run_pipeline(user_message, channel_id=None):
 
 
 # ─── Flask Routes ──────────────────────────────────────────────
+
+@app.route('/api/validate', methods=['POST'])
+def api_validate():
+    """Anti-slop validation endpoint (SO#9). Runs 7-step pipeline on provided text."""
+    try:
+        data = request.json
+        text = data.get('text', '')
+        expected_sections = data.get('expected_sections', None)
+        passed, violations = validate_output(text, expected_sections)
+        return jsonify({
+            'passed': passed,
+            'violations': violations,
+            'violation_count': len(violations),
+            'pipeline': 'HYDRA_ROSTER_SUBAGENT_V3.5',
+        })
+    except Exception as e:
+        logger.error(f"Validation error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
