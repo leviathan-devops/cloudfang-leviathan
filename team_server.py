@@ -1300,8 +1300,44 @@ HYDRA_ROSTER_LIGHT = (
 # Injected by orchestrator into every pod member's Task tool prompt.
 # Provides condensed roster + pod context + 8 anti-slop rules.
 # Template variables: {pod_type}, {agent_role}, {mission_brief}
+# ─── LAYER 2: Pod-Level Enforcement (SO#9 Triple-Layer Architecture) ────
+# Auto-injected by _timed_call() into every pipeline stage system prompt.
+# Also injected by _inject_layer2() for direct call_model() paths.
+# Maps the agent label to pod context automatically — NO dead code.
+# Fires BEFORE Layer 3 (which fires inside call_model).
+# Injection order: Layer 1 (manual in prompt) → Layer 2 (_timed_call) → Layer 3 (call_model)
+
+# Agent label → (pod_type, agent_role) mapping for auto-derivation
+AGENT_POD_MAP = {
+    # Debug pipeline
+    'gemma': ('DIAGNOSTIC_POD', 'Triage/Bridge'),
+    'qwen': ('DIAGNOSTIC_POD', 'Precision Debugger'),
+    'grok': ('BUILD_POD', 'Generals/Ingestion'),
+    'codex': ('DIAGNOSTIC_POD', 'Emergency Hardener'),
+    'opus': ('BUILD_POD', 'Emperor/Architect'),
+    'deepseek_reason': ('BUILD_POD', 'Brain/Reasoning'),
+    'deepseek_chat': ('BUILD_POD', 'V3 Base/Execution'),
+}
+
+# Label substring → pod_type override (more specific than model_key)
+LABEL_POD_OVERRIDE = {
+    'debug': 'DIAGNOSTIC_POD',
+    'audit': 'AUDIT_POD',
+    'verify': 'AUDIT_POD',
+    'architect': 'BUILD_POD',
+    'delivery': 'BUILD_POD',
+    'ingest': 'BUILD_POD',
+    'fix': 'DIAGNOSTIC_POD',
+    'harden': 'DIAGNOSTIC_POD',
+    'master prompt': 'BUILD_POD',
+    'superbrain': 'RESEARCH_POD',
+    'light': 'BUILD_POD',
+    'fallback': 'DIAGNOSTIC_POD',
+    'slop': 'AUDIT_POD',
+}
+
 HYDRA_ROSTER_POD = (
-    "=== HYDRA POD OPERATING SYSTEM ===\n"
+    "=== HYDRA POD OPERATING SYSTEM (LAYER 2 — SO#9) ===\n"
     "You are a member of a Leviathan Hydra pod. You are NOT a standalone agent.\n\n"
     "HYDRA MODEL ROSTER (authoritative - do NOT reference other models):\n"
     "Emperor: Claude Opus 4.6 | Generals: Grok 4.1 Fast Reasoning |\n"
@@ -1311,7 +1347,6 @@ HYDRA_ROSTER_POD = (
     "POD CONTEXT:\n"
     "- Pod Type: {pod_type}\n"
     "- Your Role: {agent_role}\n"
-    "- Mission: {mission_brief}\n"
     "- Quality Bar: Spetsnaz/Delta Force. A- minimum.\n\n"
     "ANTI-SLOP RULES:\n"
     "1. NEVER hallucinate model names - use ONLY the roster above\n"
@@ -1324,6 +1359,50 @@ HYDRA_ROSTER_POD = (
     "8. 3% slop compounds into systemic contamination - ZERO tolerance\n\n"
     "EXPECTED: Output that meets ONE-SHOT MILITARY-GRADE standard.\n"
 )
+
+
+def _derive_pod_context(label, model_key):
+    """Derive pod_type and agent_role from the pipeline label and model key.
+    Used by Layer 2 auto-injection in _timed_call() and _inject_layer2()."""
+    # Check label substrings first (most specific)
+    label_lower = label.lower()
+    pod_type = 'BUILD_POD'  # default
+    for substr, ptype in LABEL_POD_OVERRIDE.items():
+        if substr in label_lower:
+            pod_type = ptype
+            break
+
+    # Agent role from label (human-readable)
+    agent_role = label  # Use the pipeline label directly — it's descriptive
+
+    # Override pod_type from model key if no label match
+    if pod_type == 'BUILD_POD' and model_key in AGENT_POD_MAP:
+        pod_type, fallback_role = AGENT_POD_MAP[model_key]
+        if agent_role == label:
+            agent_role = fallback_role
+
+    return pod_type, agent_role
+
+
+def _inject_layer2(system_prompt, label, model_key):
+    """Inject Layer 2 (HYDRA_ROSTER_POD) into a system prompt.
+    Called by _timed_call() for pipeline paths and directly for
+    call_model() bypass paths. System-wide enforcement — SO#9."""
+    if not system_prompt:
+        return system_prompt
+    pod_type, agent_role = _derive_pod_context(label, model_key)
+    layer2 = HYDRA_ROSTER_POD.format(pod_type=pod_type, agent_role=agent_role)
+    return layer2 + system_prompt
+
+
+def format_pod_roster(pod_type, agent_role, mission_brief=None):
+    """Format HYDRA_ROSTER_POD with explicit pod context.
+    Use this for manual pod creation (Cowork Task tool, etc.)."""
+    return HYDRA_ROSTER_POD.format(
+        pod_type=pod_type,
+        agent_role=agent_role,
+    )
+
 
 # ─── LAYER 3: Sub-Agent Guardrail (SO#9 Triple-Layer Architecture) ─────
 # Every sub-agent carries this as its operating system guardrail.
@@ -1654,13 +1733,21 @@ def run_pipeline(user_message, channel_id=None):
 
     def _timed_call(label, model_key, system_prompt, user_msg, max_tok=None):
         """Call a model and record timing + token telemetry.
-        Injects persistent memory + conversation context into system prompt (Layer 4: startup injection)."""
+        Triple-layer injection (SO#9):
+          Layer 2: Pod context (injected here via _inject_layer2)
+          Layer 3: Subagent guardrail (injected inside call_model)
+          Layer 4: Memory context (injected here)
+        All 3 layers fire on EVERY pipeline call regardless of spawn source."""
+        # Layer 2: Pod-level enforcement — auto-derives pod context from label + model_key
+        system_prompt = _inject_layer2(system_prompt, label, model_key)
+
         # Layer 4: Inject compact memory context + T1 conversation buffer before the call
         mem_context = memory.build_context_injection(label, user_message[:200], channel_id=channel_id)
         if mem_context:
             system_prompt = f"{system_prompt}\n\n{mem_context}"
 
         t0 = time.time()
+        # Layer 3 fires inside call_model() — HYDRA_ROSTER_SUBAGENT prepended to system_prompt
         text, tok = call_model(model_key, system_prompt, user_msg, max_tok)
         elapsed = time.time() - t0
         _track(result, label, text, tok)
@@ -1884,11 +1971,14 @@ def run_pipeline(user_message, channel_id=None):
 
         if not ds_text:
             # Fallback to Gemma if DeepSeek fails
-            ds_text, ds_tok = call_model('gemma',
+            # Layer 2 injected via _inject_layer2 (direct call_model bypass — SO#9)
+            _fallback_prompt = _inject_layer2(
                 HYDRA_OPENROUTER_IDENTITY
                 + "YOUR ROLE: Emergency fallback delivery bridge.\n"
                 "DeepSeek failed. Answer the user's question directly and concisely. "
-                "Provide actionable output regardless of complexity.", user_message, 800)
+                "Provide actionable output regardless of complexity.",
+                'Gemma (fallback)', 'gemma')
+            ds_text, ds_tok = call_model('gemma', _fallback_prompt, user_message, 800)
             result['models_used'].append('Gemma 3 (fallback)')
 
         result['response'] = ds_text or "I'm here. What do you need?"
@@ -2283,7 +2373,8 @@ def run_pipeline(user_message, channel_id=None):
     result['stages'].append('delivery')
     logger.info("[BUILD] Stage 6: Delivery (Gemma)")
 
-    delivery_text, del_tok = call_model('gemma',
+    # Layer 2 injected via _inject_layer2 (direct call_model bypass — SO#9)
+    _delivery_prompt = _inject_layer2(
         HYDRA_OPENROUTER_IDENTITY
         + "YOUR ROLE: Bridge — final delivery of the completed build.\n"
         "The entire dev team has completed their work through parallel Hydra execution. "
@@ -2296,6 +2387,8 @@ def run_pipeline(user_message, channel_id=None):
         "RULES: Clean delivery only. No disclaimers, no warnings, no hedging. "
         "The Owner is a senior systems engineer who built the Leviathan ecosystem. "
         "They need copy-paste-and-run code, not opinions.",
+        'Gemma (delivery)', 'gemma')
+    delivery_text, del_tok = call_model('gemma', _delivery_prompt,
         f"USER REQUEST:\n{user_message}\n\n"
         f"PRODUCTION CODE:\n{production_text}\n\n"
         f"VERIFICATION: {verify_text[:500] if verify_text else 'Approved'}",
@@ -2726,6 +2819,58 @@ def start_discord_bot():
         else:
             await interaction.response.send_message(f"Error: {str(error)[:200]}", ephemeral=True)
 
+    # ── /build-heavy slash command (full frontier AGI DevTeam) ──
+    @tree.command(name="build-heavy", description="AGI DevTeam: ONE-SHOT military-grade build (R1 → Opus → Grok → Codex → verification). Uses paid APIs.", guild=target_guild)
+    @discord.app_commands.describe(task="What do you want the AGI DevTeam to build?", file="Attach a file (code, config, etc.) for context")
+    async def build_heavy_command(interaction: discord.Interaction, task: str, file: discord.Attachment = None):
+        await interaction.response.defer()
+        loop = asyncio.get_event_loop()
+        channel_id = str(interaction.channel_id) if interaction.channel_id else None
+        try:
+            if channel_id:
+                conv_buffer.record_owner_message(channel_id, f"/build-heavy {task}")
+            full_task = task
+            if file:
+                file_content = await _read_attachments([file])
+                if file_content:
+                    full_task = f"{task}\n\n{file_content}"
+            result = await loop.run_in_executor(None, run_pipeline, f"/build-heavy {full_task}", channel_id)
+            response_text = result.get('response', 'No response generated.')
+            models = result.get('models_used', [])
+            proc_time = result.get('processing_time', '?')
+            footer = f"\n-# AGI DevTeam · {' · '.join(models)} · {proc_time}" if models else ""
+            full_response = response_text + footer
+            await _send_response(interaction.followup.send, interaction.followup.send, full_response)
+        except Exception as e:
+            logger.error(f"Discord /build-heavy error: {e}", exc_info=True)
+            await interaction.followup.send(f"Build failed: {str(e)[:500]}")
+
+    # ── /build legacy alias (defaults to heavy) ──────────────
+    @tree.command(name="build", description="[Legacy] Same as /build-heavy. Use /build-light for free iterations.", guild=target_guild)
+    @discord.app_commands.describe(task="What do you want the dev team to build?", file="Attach a file (code, config, etc.) for context")
+    async def build_command(interaction: discord.Interaction, task: str, file: discord.Attachment = None):
+        await interaction.response.defer()
+        loop = asyncio.get_event_loop()
+        channel_id = str(interaction.channel_id) if interaction.channel_id else None
+        try:
+            if channel_id:
+                conv_buffer.record_owner_message(channel_id, f"/build-heavy {task}")
+            full_task = task
+            if file:
+                file_content = await _read_attachments([file])
+                if file_content:
+                    full_task = f"{task}\n\n{file_content}"
+            result = await loop.run_in_executor(None, run_pipeline, f"/build-heavy {full_task}", channel_id)
+            response_text = result.get('response', 'No response generated.')
+            models = result.get('models_used', [])
+            proc_time = result.get('processing_time', '?')
+            footer = f"\n-# AGI DevTeam · {' · '.join(models)} · {proc_time}" if models else ""
+            full_response = response_text + footer
+            await _send_response(interaction.followup.send, interaction.followup.send, full_response)
+        except Exception as e:
+            logger.error(f"Discord /build error: {e}", exc_info=True)
+            await interaction.followup.send(f"Build failed: {str(e)[:500]}")
+
     # ── /build-light slash command (free Qwen + DeepSeek iteration pipeline) ──
     @tree.command(name="build-light", description="Light build: FREE Qwen 3 coders + R1 architect. Iterate as much as you want.", guild=target_guild)
     @discord.app_commands.describe(task="What do you want to build? (iterate freely, near-zero cost)", file="Attach a file (code, config, etc.) for context")
@@ -2881,8 +3026,8 @@ def start_discord_bot():
                         # Fire Auditor (Gemma — free) for diagnosis
                         trigger_summary = '; '.join(slop_triggers[:5])
                         loop = asyncio.get_event_loop()
-                        audit_result = await loop.run_in_executor(None, lambda: call_model(
-                            'gemma',
+                        # Layer 2 injected via _inject_layer2 (direct call_model bypass — SO#9)
+                        _audit_prompt = _inject_layer2(
                             "You are the Auditor of the Leviathan Hydra — the immune system. "
                             "A slop detection scan flagged the following bot response. "
                             "Diagnose the root cause: is it (1) hallucinated model names, "
@@ -2891,6 +3036,9 @@ def start_discord_bot():
                             "Be forensic. Identify EXACTLY which part is slop and why. "
                             "Rate severity: LOW (cosmetic) / MEDIUM (misleading) / HIGH (dangerous). "
                             "Suggest a specific fix (prompt change, keyword filter, context limit, etc).",
+                            'Auditor (slop diagnosis)', 'gemma')
+                        audit_result = await loop.run_in_executor(None, lambda: call_model(
+                            'gemma', _audit_prompt,
                             f"SLOP TRIGGERS: {trigger_summary}\n\n"
                             f"USER MESSAGE: {content[:300]}\n\n"
                             f"BOT RESPONSE: {response_text[:800]}",
